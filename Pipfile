@@ -1,0 +1,40 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+sqlalchemy = "*"
+psycopg2-binary = "*"
+alembic = "*"
+requests = "*"
+jsonschema = "*"
+structlog = "*"
+pydantic = "*"
+pydantic-settings = "*"
+base58 = "*"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "*"}
+redis = "*"
+python-bitcoinrpc = "*"
+black = "*"
+flake8 = "*"
+autoflake = "*"
+isort = "*"
+pytest = "*"
+httpx = "*"
+
+[dev-packages]
+pytest = "*"
+pytest-asyncio = "*"
+black = "*"
+flake8 = "*"
+httpx = "*"
+mypy = "*"
+pytest-cov = "*"
+bandit = "*"
+safety = "*"
+pre-commit = "*"
+
+[requires]
+python_version = ">=3.11,<3.12"

@@ -1,0 +1,90 @@
+# docker-compose.yml - Development Setup
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: brc20_indexer
+      POSTGRES_USER: indexer
+      POSTGRES_PASSWORD: indexer_password
+    ports:
+      - "127.0.0.1:5432:5432"  # Localhost only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U indexer -d brc20_indexer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "127.0.0.1:6380:6379"  # Host port 6380 -> Container port 6379
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"  # Localhost only - secure by default
+    env_file:
+      - .env  # All sensitive config (Bitcoin RPC, DB, Redis, etc) should be set in .env
+    environment:
+      # Database (use service name for Docker networking)
+      DATABASE_URL: postgresql://indexer:indexer_password@postgres:5432/brc20_indexer
+      # Redis (use service name for Docker networking)
+      REDIS_URL: redis://redis:6379/0
+      # API Configuration
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      # Indexer Configuration
+      START_BLOCK_HEIGHT: 895534
+      BATCH_SIZE: 100
+      ENABLE_CACHING: true
+      # Logging
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./temp_docs:/app/temp_docs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/indexer/brc20/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Database migration service
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql://indexer:indexer_password@postgres:5432/brc20_indexer
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+
+# SECURITY WARNING:
+# This setup is for local development only. If you expose any service to the internet,
+# you MUST change all default passwords and users in your .env and in this file (POSTGRES_USER, POSTGRES_PASSWORD, etc).
+# Never expose PostgreSQL or Redis directly to the internet. 

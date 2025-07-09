@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing
+htmlcov/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Logs
+logs/
+*.log
+
+# Coverage
+coverage.xml
+
+# Database
+*.sql
+*.db
+
+# System files
+.DS_Store
+.vscode/
+.idea/
+*.pid
+
+# Development
+temp_docs/
+backups/
+dev/
+
+# Alembic
+alembic/versions/*.py
+!alembic/versions/b896be53b879_initial_tables.py
+!alembic/versions/add_deployer_address_to_deploy.py
+!alembic/versions/ff9599cfaa41_add_is_marketplace_to_brc20_operations.py
