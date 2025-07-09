@@ -1,7 +1,7 @@
 # Simplicity
 
-[![CI/CD Pipeline](https://github.com/The-Universal-BRC-20-Extension/simplicity-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Universal-BRC-20-Extension/simplicity-dev/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen)](https://github.com/The-Universal-BRC20-Extension/simplicity-dev)
+[![CI/CD Pipeline](https://github.com/The-Universal-BRC-20-Extension/simplicity/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Universal-BRC-20-Extension/simplicity/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-379%20passing-brightgreen)](https://github.com/The-Universal-BRC20-Extension/simplicity)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
@@ -157,7 +157,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 - **Documentation**: [Full Documentation](docs/)
 - **API Reference**: [Interactive API Docs](http://localhost:8080/docs)
-- **Issues**: [GitHub Issues](https://github.com/The-Universal-BRC-20-Extension/simplicity-dev/issues)
+- **Issues**: [GitHub Issues](https://github.com/The-Universal-BRC-20-Extension/simplicity/issues)
 - **Security**: [Security Policy](SECURITY.md)
 
 --- 

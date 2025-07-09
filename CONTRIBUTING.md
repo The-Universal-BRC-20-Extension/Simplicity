@@ -14,8 +14,8 @@ Thank you for your interest in contributing! This guide provides clear processes
 
 ```bash
 # 1. Fork and clone
-git clone https://github.com/The-Universal-BRC20-Extension/simplicity-dev.git
-cd simplicity-dev
+git clone https://github.com/The-Universal-BRC20-Extension/simplicity.git
+cd simplicity
 
 # 2. Install dependencies
 pip install pipenv

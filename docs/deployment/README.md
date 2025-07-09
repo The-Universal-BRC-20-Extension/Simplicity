@@ -74,8 +74,8 @@ There are two main ways to deploy Simplicity Indexer:
 1. **Ensure your Bitcoin node is running and fully synced.**
 2. **Clone the repository:**
    ```bash
-   git clone https://github.com/The-Universal-BRC20-Extension/simplicity-dev.git
-   cd simplicity-dev
+   git clone https://github.com/The-Universal-BRC20-Extension/simplicity.git
+   cd simplicity
    ```
 3. **Copy and edit the environment file:**
    ```bash
@@ -118,8 +118,8 @@ There are two main ways to deploy Simplicity Indexer:
      ```
 4. **Clone the repository:**
    ```bash
-   git clone https://github.com/The-Universal-BRC20-Extension/simplicity-dev.git
-   cd simplicity-dev
+   git clone https://github.com/The-Universal-BRC20-Extension/simplicity.git
+   cd simplicity
    ```
 5. **Copy and edit the environment file:**
    ```bash
