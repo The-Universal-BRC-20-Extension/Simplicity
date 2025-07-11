@@ -21,6 +21,11 @@ class Settings(BaseSettings):
         984444  # Block height when strict mint OP_RETURN position validation starts
     )
 
+    # Marketplace validation settings
+    MARKETPLACE_TRANSFER_BLOCK_HEIGHT: int = (
+        901350  # Block height when new marketplace transfer template validation starts
+    )
+
     # Performance
     MAX_WORKERS: int = 1  # Sequential processing
     DB_POOL_SIZE: int = 5
@@ -41,16 +46,23 @@ class Settings(BaseSettings):
 
     # API
     API_HOST: str = "127.0.0.1"
-    API_PORT: int = 8080
+    API_PORT: int = 8081
 
     # Cache Redis
     REDIS_URL: str = "redis://localhost:6380/0"
     CACHE_TTL: int = 300
 
+    # OPI (OP_RETURN Indexer) Settings
+    OPI_LC_URL: str = "http://localhost:3003"
+    OPI_ENABLED: bool = True
+    OPI_DEFAULT_TIMEOUT: int = 30
+    OPI_MAX_RETRIES: int = 3
+    OPI_000_SATOSHI_ADDRESS: str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+
     # Indexer Version
     INDEXER_VERSION: str = "1.0.0"
 
-    model_config: ClassVar[SettingsConfigDict] = {"env_file": ".env"}
+    model_config: ClassVar[SettingsConfigDict] = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

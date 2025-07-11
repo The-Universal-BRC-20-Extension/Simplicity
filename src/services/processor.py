@@ -110,12 +110,6 @@ class BRC20Processor:
         """
         Process a complete transaction
 
-        REFACTORED WORKFLOW:
-        1. Extract OP_RETURN (if present)
-        2. Parse BRC-20 payload
-        3. Delegate to specific operation processors
-        4. Return aggregated result
-
         Args:
             tx: Transaction data from Bitcoin RPC
             block_height: Height of the block containing this transaction
@@ -186,9 +180,21 @@ class BRC20Processor:
             result.ticker = parsed_operation.get("tick")
             result.amount = parsed_operation.get("amt")
 
-            # ✅ REFACTORED: Pure delegation to specific processors
-            # NO operation-specific logic here - processors handle validation
             operation_type = parsed_operation.get("op")
+            
+            if operation_type == "no_return":
+                from src.services.opi.processor import OPIProcessor
+                opi_processor = OPIProcessor(self.db)
+                opi_result = opi_processor.process_if_opi(parsed_operation, tx)
+                
+                if opi_result:
+                    result.operation_found = True
+                    result.is_valid = opi_result.is_valid
+                    result.operation_type = "no_return"
+                    if not opi_result.is_valid:
+                        result.error_message = f"OPI_ERROR: {opi_result.error_message}"
+                    return result
+            
             if operation_type == "deploy":
                 validation_result = self.process_deploy(parsed_operation, tx, hex_data)
             elif operation_type == "mint":
@@ -221,8 +227,6 @@ class BRC20Processor:
         """
         Process validated deploy with complete ownership of deploy logic
 
-        REFACTORED: All deploy-specific logic consolidated here
-
         Args:
             operation: Parsed BRC-20 operation
             tx_info: Transaction information
@@ -231,7 +235,6 @@ class BRC20Processor:
         Returns:
             ValidationResult with success/failure status
         """
-        # Deploy-specific validation
         validation_result = self.validator.validate_complete_operation(
             operation,
             tx_info.get("vout", []),
@@ -239,10 +242,8 @@ class BRC20Processor:
         )
 
         if validation_result.is_valid:
-            # Get deployer address (ONLY from first input address)
             deployer_address = self.get_first_input_address(tx_info)
 
-            # Convert block timestamp safely
             try:
                 deploy_timestamp = self._convert_block_timestamp(
                     self.current_block_timestamp
@@ -261,7 +262,6 @@ class BRC20Processor:
                     f"Invalid timestamp: {str(e)}",
                 )
             else:
-                # Create deploy record
                 deploy = Deploy(
                     ticker=operation["tick"],
                     max_supply=operation["m"],
@@ -282,7 +282,6 @@ class BRC20Processor:
                 self.db.add(deploy)
                 self.db.flush()
 
-        # Log operation
         self.log_operation(
             operation_data=operation,
             validation_result=validation_result,
@@ -299,9 +298,6 @@ class BRC20Processor:
     ) -> ValidationResult:
         """
         Process validated mint with complete ownership of mint logic
-
-        REFACTORED: All mint-specific logic consolidated here
-        INCLUDES: Block height-based OP_RETURN position validation
 
         Args:
             operation: Parsed BRC-20 operation
@@ -478,7 +474,9 @@ class BRC20Processor:
         """
         Validate if a transfer is a valid marketplace transfer based on block height.
         """
-        if block_height < 901350:
+        from src.config import settings
+        
+        if block_height < settings.MARKETPLACE_TRANSFER_BLOCK_HEIGHT:
             return self._validate_early_marketplace_template(tx_info)
         else:
             return self._validate_new_marketplace_template(tx_info)
@@ -500,8 +498,7 @@ class BRC20Processor:
     ) -> "TransferType":
         """
         Classify transfer type before validation for optimization
-
-        OPTIMIZATION: Avoids redundant marketplace validation for simple transfers
+        
         Returns: TransferType enum value
         """
         # Quick check - if no marketplace sighash, it's definitely simple
@@ -523,8 +520,6 @@ class BRC20Processor:
     ) -> ValidationResult:
         """
         Process validated transfer with complete ownership of transfer logic
-
-        REFACTORED: All transfer-specific logic consolidated here
 
         Args:
             operation: Parsed BRC-20 operation

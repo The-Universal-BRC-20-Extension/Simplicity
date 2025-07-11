@@ -9,6 +9,8 @@ from .config import settings
 from .database.connection import get_db
 from .services.bitcoin_rpc import BitcoinRPCService
 from .services.indexer import IndexerService
+from .services.opi.implementations.opi_000 import Opi000Implementation
+from .services.opi.registry import opi_registry
 
 # Configure logging
 structlog.configure(
@@ -27,6 +29,10 @@ def main(max_blocks=None, continuous=False):
     logger.info("Starting Universal BRC-20 Indexer", config=settings.model_dump())
 
     try:
+        # ✅ NEW: Register OPI implementations
+        opi_registry.register_opi(Opi000Implementation())
+        logger.info("OPI implementations registered", opi_count=len(opi_registry.list_opis()))
+
         # Initialize services
         db_session: Session = next(get_db())
         bitcoin_rpc = BitcoinRPCService(

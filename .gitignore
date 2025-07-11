@@ -62,8 +62,3 @@ temp_docs/
 backups/
 dev/
 
-# Alembic
-alembic/versions/*.py
-!alembic/versions/b896be53b879_initial_tables.py
-!alembic/versions/add_deployer_address_to_deploy.py
-!alembic/versions/ff9599cfaa41_add_is_marketplace_to_brc20_operations.py
