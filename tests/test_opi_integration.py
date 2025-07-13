@@ -41,7 +41,7 @@ class TestOPIEndToEndWorkflow:
         # 1. Setup operation and transaction data
         operation = {"op": "no_return", "tick": "TEST"}
         tx_info = {
-            "txid": "test_txid_123",
+            "txid": "a" * 64,
             "vout_index": 0,
             "block_height": 800000,
             "block_hash": "test_hash",
@@ -52,9 +52,9 @@ class TestOPIEndToEndWorkflow:
         legacy_event = {
             "event_type": "transfer-transfer",
             "inscription_id": "test_txid:i0",
-            "to_pkScript": "test_pkscript",
+            "to_pkScript": "76a9141234567890abcdef1234567890abcdef1234567890abcdef88ac",
             "tick": "TEST",
-            "from_pkScript": "sender_pkscript",
+            "from_pkScript": "76a914abcdef1234567890abcdef1234567890abcdef12345688ac",
             "amount": "100",
         }
 
@@ -97,7 +97,7 @@ class TestOPIEndToEndWorkflow:
                         added_opi_op = self.mock_db.add.call_args[0][0]
                         assert isinstance(added_opi_op, OPIOperation)
                         assert added_opi_op.opi_id == "Opi-000"
-                        assert added_opi_op.txid == "test_txid_123"
+                        assert added_opi_op.txid == "a" * 64
                         assert added_opi_op.operation_type == "no_return"
 
     def test_complete_no_return_workflow_validation_failure(self):
@@ -173,6 +173,7 @@ class TestOPIDatabaseIntegration:
     def setup_method(self):
         """Setup database integration tests"""
         self.mock_db = Mock()
+        self.mock_bitcoin_rpc = Mock()
         self.opi_processor = OPIProcessor(self.mock_db)
 
     def test_opi_operation_database_persistence(self):
@@ -347,8 +348,9 @@ class TestOPIProcessorIntegration:
     def setup_method(self):
         """Setup processor integration tests"""
         self.mock_db = Mock()
+        self.mock_bitcoin_rpc = Mock()
         self.opi_processor = OPIProcessor(self.mock_db)
-        self.brc20_processor = BRC20Processor(self.mock_db)
+        self.brc20_processor = BRC20Processor(self.mock_db, self.mock_bitcoin_rpc)
 
     def test_opi_processor_integration_with_main_processor(self):
         """Test OPI processor integration with main BRC-20 processor"""

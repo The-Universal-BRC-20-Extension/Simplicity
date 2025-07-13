@@ -20,6 +20,9 @@ class OPIOperation(Base):
     opi_id = Column(String(50), nullable=False, index=True)
     txid = Column(String(64), nullable=False, index=True)
     block_height = Column(Integer, nullable=False, index=True)
+    vout_index = Column(Integer, nullable=True)
+    operation_type = Column(String(50), nullable=True)
+    satoshi_address = Column(String(100), nullable=True)
     operation_data = Column(JSON)
     validation_result = Column(JSON)
     processing_result = Column(JSON)
@@ -59,6 +62,24 @@ class OPIOperation(Base):
             raise ValueError("block_height must be a non-negative integer")
         return value
 
+    @validates("vout_index")
+    def validate_vout_index(self, key, value):
+        if value is not None and value < 0:
+            raise ValueError("vout_index must be a non-negative integer")
+        return value
+
+    @validates("operation_type")
+    def validate_operation_type(self, key, value):
+        if value and len(value) > 50:
+            raise ValueError("operation_type must be 50 characters or less")
+        return value
+
+    @validates("satoshi_address")
+    def validate_satoshi_address(self, key, value):
+        if value and len(value) > 100:
+            raise ValueError("satoshi_address must be 100 characters or less")
+        return value
+
     def to_dict(self) -> dict:
         """Convert operation to dictionary for API responses"""
         return {
@@ -66,6 +87,9 @@ class OPIOperation(Base):
             "opi_id": self.opi_id,
             "txid": self.txid,
             "block_height": self.block_height,
+            "vout_index": self.vout_index,
+            "operation_type": self.operation_type,
+            "satoshi_address": self.satoshi_address,
             "operation_data": self.operation_data,
             "validation_result": self.validation_result,
             "processing_result": self.processing_result,

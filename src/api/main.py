@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from src.api.routers.brc20 import router as brc20_router
 from src.api.routers.opi import router as opi_router
+from src.api.routers.agent_communication import router as agent_comm_router
 from src.utils.logging import setup_logging
 
 setup_logging()
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(brc20_router, tags=["BRC-20"])
 app.include_router(opi_router, tags=["OPI Framework"])  # ✅ NEW
+app.include_router(agent_comm_router, tags=["Agent Communication"])  # ✅ NEW
 
 
 @app.exception_handler(Exception)

@@ -1,0 +1,68 @@
+# Agent B External Agents Configuration
+# This file configures Agent B's connections to external agents
+
+external_agents:
+  agent_a:
+    name: "Agent A (BRC-20 Provider)"
+    base_url: "http://agent-a.example.com:8080"
+    api_key: "your-secret-api-key-for-agent-a"
+    health_check_path: "/health"
+    timeout: 30
+    retry_attempts: 3
+    circuit_breaker_threshold: 5
+    
+  agent_c:
+    name: "Agent C (OPI Processor)"
+    base_url: "http://agent-c.example.com:8081"
+    api_key: "your-secret-api-key-for-agent-c"
+    health_check_path: "/health"
+    timeout: 45
+    retry_attempts: 5
+    circuit_breaker_threshold: 3
+
+# Integration settings
+integration:
+  cache_enabled: true
+  cache_ttl: 300  # seconds
+  retry_backoff_factor: 2
+  max_retry_backoff: 60
+  
+  # Health check settings
+  health_check:
+    interval: 60  # seconds
+    timeout: 10
+    failure_threshold: 3
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "json"
+  include_agent_id: true
+  include_request_id: true
+
+# Monitoring settings
+monitoring:
+  enabled: true
+  metrics_prefix: "agent_b_integration"
+  collect_response_times: true
+  collect_error_rates: true
+  collect_circuit_breaker_metrics: true
+
+# Security settings
+security:
+  # SSL/TLS settings
+  ssl_verify: true
+  ssl_cert_path: null
+  
+  # Rate limiting
+  rate_limit:
+    enabled: false
+    requests_per_minute: 100
+
+# Development settings
+development:
+  debug: false
+  mock_responses: false
+  log_all_requests: false
+  simulate_delay: false
+  delay_range: [0, 100]  # milliseconds 

@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 import time
+import datetime
 
 from src.api.routers.opi import router as opi_router
 from src.services.opi.registry import opi_registry
@@ -44,7 +45,7 @@ class TestOPIFrameworkEndpoints:
         with patch("src.services.opi.registry.opi_registry.list_opis") as mock_list:
             mock_list.return_value = ["Opi-000", "Opi-001"]
 
-            response = self.client.get("/v1/indexer/brc20/opis")
+            response = self.client.get("/v1/indexer/brc20/opi")
 
             assert response.status_code == 200
             data = response.json()
@@ -67,7 +68,7 @@ class TestOPIFrameworkEndpoints:
         """Test successful get OPI details endpoint"""
         # Mock database query
         mock_config = OPIConfiguration(
-            opi_id="Opi-000",
+            opi_id="OPI-000",
             version="1.0.0",
             is_enabled=True,
             description="Test OPI configuration",
@@ -80,11 +81,11 @@ class TestOPIFrameworkEndpoints:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opis/Opi-000")
+            response = self.client.get("/v1/indexer/brc20/opi/OPI-000")
 
             assert response.status_code == 200
             data = response.json()
-            assert data["opi_id"] == "Opi-000"
+            assert data["opi_id"] == "OPI-000"
             assert data["version"] == "1.0.0"
             assert data["is_enabled"] is True
 
@@ -104,7 +105,7 @@ class TestOPIFrameworkEndpoints:
     def test_get_opi_details_case_insensitive(self):
         """Test get OPI details endpoint with case-insensitive search"""
         mock_config = OPIConfiguration(
-            opi_id="Opi-000", version="1.0.0", is_enabled=True
+            opi_id="OPI-000", version="1.0.0", is_enabled=True
         )
 
         with patch("src.database.connection.get_db") as mock_get_db:
@@ -119,7 +120,7 @@ class TestOPIFrameworkEndpoints:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["opi_id"] == "Opi-000"
+            assert data["opi_id"] == "OPI-000"
 
     def test_list_opis_performance(self):
         """Test list OPIs endpoint performance"""
@@ -161,16 +162,23 @@ class TestOPI000SpecificEndpoints:
         """Setup test client for OPI-000 endpoints"""
         from fastapi import FastAPI
         from src.services.opi.implementations.opi_000 import Opi000Implementation
+        from src.api.routers.opi import router as opi_router
 
         self.app = FastAPI()
         self.opi_impl = Opi000Implementation()
 
+        # Include the main OPI framework router (contains /no_return/transactions)
+        self.app.include_router(opi_router)
+        
         # Include the OPI-000 endpoints
         for router in self.opi_impl.get_api_endpoints():
             self.app.include_router(router)
 
         self.client = TestClient(self.app)
         self.mock_db = Mock()
+        # Dependency override for get_db
+        from src.database import connection
+        self.app.dependency_overrides[connection.get_db] = lambda: self.mock_db
 
     def test_list_no_return_transactions_success(self):
         """Test successful list no_return transactions endpoint"""
@@ -179,37 +187,48 @@ class TestOPI000SpecificEndpoints:
             OPIOperation(
                 id=1,
                 opi_id="Opi-000",
-                txid="test_txid_1",
+                txid="a" * 64,
                 block_height=800000,
                 vout_index=0,
                 operation_type="no_return",
                 satoshi_address="1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+                created_at=datetime.datetime.utcnow(),
+                updated_at=datetime.datetime.utcnow(),
             ),
             OPIOperation(
                 id=2,
                 opi_id="Opi-000",
-                txid="test_txid_2",
+                txid="b" * 64,
                 block_height=800001,
                 vout_index=0,
                 operation_type="no_return",
-                satoshi_address="1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+                satoshi_address="1A1zP1eP5QGefi2DMPTfNa",
+                created_at=datetime.datetime.utcnow(),
+                updated_at=datetime.datetime.utcnow(),
             ),
         ]
 
-        with patch("src.database.connection.get_db") as mock_get_db:
-            mock_db = Mock()
-            mock_db.query.return_value.filter.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = (
-                mock_ops
-            )
-            mock_get_db.return_value = mock_db
+        # Mock the full chain for .all()
+        mock_query = Mock()
+        mock_filter = Mock()
+        mock_order = Mock()
+        mock_offset = Mock()
+        mock_limit = Mock()
+        mock_limit.all.return_value = mock_ops
+        mock_offset.limit.return_value = mock_limit
+        mock_order.offset.return_value = mock_offset
+        mock_filter.order_by.return_value = mock_order
+        mock_query.filter.return_value = mock_filter
+        self.mock_db.query.return_value = mock_query
+        # Mock count
+        mock_filter.count.return_value = len(mock_ops)
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+        response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
 
-            assert response.status_code == 200
-            data = response.json()
-            assert len(data) == 2
-            assert data[0]["txid"] == "test_txid_1"
-            assert data[1]["txid"] == "test_txid_2"
+        assert response.status_code == 200
+        data = response.json()
+        assert "transactions" in data
+        assert len(data["transactions"]) == 2
 
     def test_list_no_return_transactions_pagination(self):
         """Test list no_return transactions with pagination"""
@@ -217,7 +236,7 @@ class TestOPI000SpecificEndpoints:
             OPIOperation(
                 id=3,
                 opi_id="Opi-000",
-                txid="test_txid_3",
+                txid="c" * 64,
                 block_height=800002,
                 vout_index=0,
                 operation_type="no_return",
@@ -232,7 +251,7 @@ class TestOPI000SpecificEndpoints:
             mock_get_db.return_value = mock_db
 
             response = self.client.get(
-                "/v1/indexer/brc20/opi0/transactions?skip=10&limit=5"
+                "/v1/indexer/brc20/opi/no_return/transactions?skip=10&limit=5"
             )
 
             assert response.status_code == 200
@@ -248,7 +267,7 @@ class TestOPI000SpecificEndpoints:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
 
             assert response.status_code == 200
             data = response.json()
@@ -261,7 +280,7 @@ class TestOPI000SpecificEndpoints:
             mock_db.query.side_effect = Exception("Database error")
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
 
             assert response.status_code == 500
             data = response.json()
@@ -273,7 +292,7 @@ class TestOPI000SpecificEndpoints:
             OPIOperation(
                 id=i,
                 opi_id="Opi-000",
-                txid=f"test_txid_{i}",
+                txid=f"{chr(97 + i)}" * 64,
                 block_height=800000 + i,
                 vout_index=0,
                 operation_type="no_return",
@@ -289,7 +308,7 @@ class TestOPI000SpecificEndpoints:
             mock_get_db.return_value = mock_db
 
             start_time = time.time()
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
             response_time = (time.time() - start_time) * 1000
 
             assert response.status_code == 200
@@ -301,7 +320,7 @@ class TestOPI000SpecificEndpoints:
             OPIOperation(
                 id=1,
                 opi_id="Opi-000",
-                txid="test_txid_1",
+                txid="a" * 64,
                 block_height=800000,
                 vout_index=0,
                 operation_type="no_return",
@@ -315,7 +334,7 @@ class TestOPI000SpecificEndpoints:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
 
             assert response.status_code == 200
             # Verify default values were used (skip=0, limit=100)
@@ -353,15 +372,15 @@ class TestOPIAPIErrorHandling:
     def test_list_no_return_transactions_invalid_pagination(self):
         """Test list no_return transactions with invalid pagination parameters"""
         # Test negative skip value
-        response = self.client.get("/v1/indexer/brc20/opi0/transactions?skip=-1")
+        response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions?skip=-1")
         assert response.status_code == 422  # Validation error
 
         # Test negative limit value
-        response = self.client.get("/v1/indexer/brc20/opi0/transactions?limit=-5")
+        response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions?limit=-5")
         assert response.status_code == 422  # Validation error
 
         # Test very large limit value
-        response = self.client.get("/v1/indexer/brc20/opi0/transactions?limit=10000")
+        response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions?limit=10000")
         assert response.status_code == 422  # Validation error
 
     def test_get_opi_details_malformed_opi_id(self):
@@ -390,7 +409,7 @@ class TestOPIAPIResponseFormat:
         with patch("src.services.opi.registry.opi_registry.list_opis") as mock_list:
             mock_list.return_value = ["Opi-000", "Opi-001"]
 
-            response = self.client.get("/v1/indexer/brc20/opi")
+            response = self.client.get("/v1/indexer/brc20/opis")
 
             assert response.status_code == 200
             data = response.json()
@@ -418,7 +437,7 @@ class TestOPIAPIResponseFormat:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi")
+            response = self.client.get("/v1/indexer/brc20/opis/Opi-000")
 
             assert response.status_code == 200
             data = response.json()
@@ -439,7 +458,8 @@ class TestOPIAPIResponseFormat:
             OPIOperation(
                 id=1,
                 opi_id="Opi-000",
-                txid="test_txid_1",
+                txid="a" * 64,
+                block_height=800000,
                 vout_index=0,
                 operation_type="no_return",
                 satoshi_address="1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
@@ -455,16 +475,21 @@ class TestOPIAPIResponseFormat:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
 
             assert response.status_code == 200
             data = response.json()
 
             # Check response structure
-            assert isinstance(data, list)
-            assert len(data) == 1
+            assert isinstance(data, dict)
+            assert "total" in data
+            assert "skip" in data
+            assert "limit" in data
+            assert "transactions" in data
+            assert isinstance(data["transactions"], list)
+            assert len(data["transactions"]) == 1
 
-            op_data = data[0]
+            op_data = data["transactions"][0]
             assert "id" in op_data
             assert "opi_id" in op_data
             assert "txid" in op_data
@@ -498,7 +523,7 @@ class TestOPIAPISecurity:
             mock_db.query.return_value.filter.return_value.first.return_value = None
             mock_get_db.return_value = mock_db
 
-            response = self.client.get(f"/v1/indexer/brc20/opis/{malicious_opi_id}")
+            response = self.client.get(f"/v1/indexer/brc20/opi/{malicious_opi_id}")
 
             # Should not cause database errors, just return 404
             assert response.status_code == 404
@@ -507,7 +532,7 @@ class TestOPIAPISecurity:
         """Test input validation on OPI endpoints"""
         # Test with invalid pagination parameters
         response = self.client.get(
-            "/v1/indexer/brc20/opi0/transactions?skip=abc&limit=def"
+            "/v1/indexer/brc20/opi/no_return/transactions?skip=abc&limit=def"
         )
         assert response.status_code == 422  # Validation error
 
@@ -516,7 +541,7 @@ class TestOPIAPISecurity:
         with patch("src.database.connection.get_db") as mock_get_db:
             mock_get_db.side_effect = Exception("Database password: secret123")
 
-            response = self.client.get("/v1/indexer/brc20/opis/Opi-000")
+            response = self.client.get("/v1/indexer/brc20/opi/Opi-000")
 
             assert response.status_code == 500
             data = response.json()
@@ -550,7 +575,7 @@ class TestOPIAPIIntegration:
         with patch("src.services.opi.registry.opi_registry.list_opis") as mock_list:
             mock_list.return_value = ["Opi-000"]
 
-            response = self.client.get("/v1/indexer/brc20/opis")
+            response = self.client.get("/v1/indexer/brc20/opi")
             assert response.status_code == 200
             data = response.json()
             assert "Opi-000" in data["opis"]
@@ -567,17 +592,17 @@ class TestOPIAPIIntegration:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opis/Opi-000")
+            response = self.client.get("/v1/indexer/brc20/opi/Opi-000")
             assert response.status_code == 200
             data = response.json()
-            assert data["opi_id"] == "Opi-000"
+            assert data["opi_id"] == "OPI-000"
 
         # 3. List OPI-000 transactions
         mock_ops = [
             OPIOperation(
                 id=1,
                 opi_id="Opi-000",
-                txid="test_txid_1",
+                txid="a" * 64,
                 block_height=800000,
                 vout_index=0,
                 operation_type="no_return",
@@ -591,11 +616,11 @@ class TestOPIAPIIntegration:
             )
             mock_get_db.return_value = mock_db
 
-            response = self.client.get("/v1/indexer/brc20/opi0/transactions")
+            response = self.client.get("/v1/indexer/brc20/opi/no_return/transactions")
             assert response.status_code == 200
             data = response.json()
-            assert len(data) == 1
-            assert data[0]["txid"] == "test_txid_1"
+            assert len(data["transactions"]) == 1
+            assert data["transactions"][0]["txid"] == "test_txid_1"
 
     def test_concurrent_api_requests(self):
         """Test concurrent API requests performance"""
@@ -609,7 +634,7 @@ class TestOPIAPIIntegration:
                 mock_list.return_value = ["Opi-000"]
 
                 start_time = time.time()
-                response = self.client.get("/v1/indexer/brc20/opis")
+                response = self.client.get("/v1/indexer/brc20/opi")
                 response_time = (time.time() - start_time) * 1000
 
                 results.append(

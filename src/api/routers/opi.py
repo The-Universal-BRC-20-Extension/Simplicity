@@ -31,6 +31,33 @@ async def get_opi_details(opi_id: str, db: Session = Depends(get_db)):
     return config
 
 
+@router.get("/no_return/transactions", summary="List all no_return transactions")
+async def list_no_return_transactions(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db)
+):
+    """List all OPI-000 (no_return) transactions with pagination"""
+    # Validate pagination (FastAPI Query already does this, but double-check for tests)
+    if skip < 0 or limit < 1 or limit > 1000:
+        raise HTTPException(status_code=422, detail="Invalid pagination parameters")
+
+    query = db.query(OPIOperation).filter(OPIOperation.opi_id.ilike("OPI-000"))
+    total = query.count()
+    operations = (
+        query.order_by(OPIOperation.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "transactions": [op.to_dict() for op in operations],
+    }
+
+
 @router.get("/{opi_id}/transactions", summary="List transactions for a specific OPI")
 async def list_opi_transactions(opi_id: str, db: Session = Depends(get_db)):
     # This would query the OPIOperation table
