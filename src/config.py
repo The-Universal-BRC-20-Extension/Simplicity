@@ -53,11 +53,20 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 300
 
     # OPI (OP_RETURN Indexer) Settings
-    OPI_LC_URL: str = "http://localhost:3003"
+    OPI_LC_URL: str = "http://localhost:3004"
     OPI_ENABLED: bool = True
     OPI_DEFAULT_TIMEOUT: int = 30
     OPI_MAX_RETRIES: int = 3
     OPI_000_SATOSHI_ADDRESS: str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+
+    # Legacy validation settings
+    LEGACY_VALIDATION_ENABLED: bool = True
+    LEGACY_VALIDATION_TIMEOUT: int = 30
+    LEGACY_VALIDATION_MAX_RETRIES: int = 3
+    
+    # Supply tracking settings
+    SUPPLY_TRACKING_ENABLED: bool = True
+    SUPPLY_UPDATE_INTERVAL: int = 300  # 5 minutes
 
     # Indexer Version
     INDEXER_VERSION: str = "1.0.0"

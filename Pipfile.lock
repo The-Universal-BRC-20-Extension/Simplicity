@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "9b1b712531e237636a2417bdeccd9e8eebae3b3a8a2b8178f99ca6fb36c5428c"
+            "sha256": "bf6ee8c9b87ac1a06a79ddbf1dba81a5d695185984707a28f7faa8d2847055d8"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -765,6 +765,15 @@
             "index": "pypi",
             "markers": "python_version >= '3.9'",
             "version": "==8.4.1"
+        },
+        "pytest-docker": {
+            "hashes": [
+                "sha256:26a1c711d99ef01e86e7c9c007f69641552c1554df4fccb065b35581cca24206",
+                "sha256:f973c35e6f2b674c8fc87e8b3354b02c15866a21994c0841a338c240a05de1eb"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.8'",
+            "version": "==3.2.3"
         },
         "python-bitcoinrpc": {
             "hashes": [

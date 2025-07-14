@@ -24,17 +24,24 @@ from src.utils.bitcoin import (
 from src.utils.exceptions import BRC20ErrorCodes, ValidationResult
 
 
+def get_regex_operator(db):
+    if hasattr(db.bind, 'dialect') and db.bind.dialect.name == 'postgresql':
+        return '~'
+    return 'regexp'
+
 class BRC20Validator:
     """Validate operations according to consensus rules"""
 
-    def __init__(self, db_session: Session):
+    def __init__(self, db_session: Session, legacy_service=None):
         """
         Initialize validator
 
         Args:
             db_session: Database session for queries
+            legacy_service: LegacyTokenService for legacy validation
         """
         self.db = db_session
+        self.legacy_service = legacy_service
 
     def validate_deploy(self, operation: Dict[str, Any]) -> ValidationResult:
         """
@@ -50,11 +57,25 @@ class BRC20Validator:
         - Ticker must not already exist
         - max_supply must be valid integer
         - limit_per_op optional but if present must be valid integer
+        - NEW: Token must not exist on legacy system
         """
         ticker = operation.get("tick")
-        max_supply = operation.get("m")
-        limit_per_op = operation.get("l")
+        
+        # Extract fields from either m/l or max/lim format
+        if "m" in operation:
+            max_supply = operation.get("m")
+            limit_per_op = operation.get("l")
+        elif "max" in operation:
+            max_supply = operation.get("max")
+            limit_per_op = operation.get("lim")
+        else:
+            return ValidationResult(
+                False,
+                BRC20ErrorCodes.INVALID_AMOUNT,
+                "Missing max supply field (use 'm' or 'max')"
+            )
 
+        # 1. Existing validation (ticker not exists, valid amounts)
         existing_deploy = (
             self.db.query(Deploy).filter(Deploy.ticker.ilike(ticker)).first()
         )
@@ -79,6 +100,13 @@ class BRC20Validator:
                     BRC20ErrorCodes.INVALID_AMOUNT,
                     f"Invalid limit per operation: {limit_per_op}",
                 )
+
+        # 2. NEW: Legacy validation (not deployed on Ordinals)
+        if self.legacy_service:
+            block_height = operation.get("block_height")
+            legacy_validation = self.legacy_service.validate_deploy_against_legacy(ticker, block_height)
+            if not legacy_validation.is_valid:
+                return legacy_validation
 
         return ValidationResult(True)
 
@@ -298,10 +326,12 @@ class BRC20Validator:
         Returns:
             str: Current total supply as string
         """
+        regex_op = get_regex_operator(self.db)
         # Sum all balances for this ticker - Use case-insensitive comparison
         total = (
             self.db.query(func.coalesce(func.sum(cast(Balance.balance, BigInteger)), 0))
             .filter(Balance.ticker.ilike(ticker))
+            .filter(Balance.balance.op(regex_op)('^[0-9]+$'))  # Cross-DB regex: only numeric balances
             .scalar()
         )
 
@@ -320,7 +350,7 @@ class BRC20Validator:
             str: Total minted amount as string
         """
         from src.models.transaction import BRC20Operation
-
+        regex_op = get_regex_operator(self.db)
         # Sum all valid mint operations for this ticker
         result = (
             self.db.query(
@@ -330,6 +360,7 @@ class BRC20Validator:
                 BRC20Operation.ticker.ilike(ticker),  # Case-insensitive comparison
                 BRC20Operation.operation == "mint",
                 BRC20Operation.is_valid is True,  # Only count valid mints
+                BRC20Operation.amount.op(regex_op)('^[0-9]+$'),  # Cross-DB regex: only numeric amounts
             )
             .scalar()
         )

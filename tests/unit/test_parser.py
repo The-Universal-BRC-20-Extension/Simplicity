@@ -290,6 +290,36 @@ class TestBRC20Parser:
         assert error_code == BRC20ErrorCodes.INVALID_AMOUNT
         assert "must be string" in error_message
 
+    def test_validate_deploy_fields_max_lim_format(self):
+        """Test deploy with max/lim format (legacy)"""
+        operation = {"p": "brc-20", "op": "deploy", "tick": "TEST", "max": "1000000", "lim": "1000"}
+
+        is_valid, error_code, error_message = self.parser.validate_json_structure(operation)
+
+        assert is_valid is True
+        assert error_code is None
+        assert error_message is None
+
+    def test_validate_deploy_fields_mixed_format_error(self):
+        """Test deploy with mixed format (m + lim)"""
+        operation = {"p": "brc-20", "op": "deploy", "tick": "TEST", "m": "1000000", "lim": "1000"}
+
+        is_valid, error_code, error_message = self.parser.validate_json_structure(operation)
+
+        assert is_valid is False
+        assert error_code == BRC20ErrorCodes.INVALID_AMOUNT
+        assert "Cannot use 'm' with 'lim'" in error_message
+
+    def test_validate_deploy_fields_mixed_format_error_2(self):
+        """Test deploy with mixed format (max + l)"""
+        operation = {"p": "brc-20", "op": "deploy", "tick": "TEST", "max": "1000000", "l": "1000"}
+
+        is_valid, error_code, error_message = self.parser.validate_json_structure(operation)
+
+        assert is_valid is False
+        assert error_code == BRC20ErrorCodes.INVALID_AMOUNT
+        assert "Cannot use 'max' with 'l'" in error_message
+
     def test_validate_mint_fields_missing_amount(self):
         """Test mint missing amount"""
         operation = {"p": "brc-20", "op": "mint", "tick": "TEST"}

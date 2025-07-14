@@ -2,7 +2,7 @@ from sqlalchemy import Column, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-from src.utils.amounts import add_amounts, compare_amounts, subtract_amounts
+from src.utils.amounts import add_amounts, compare_amounts, subtract_amounts, is_valid_numeric_string
 
 from .base import Base
 
@@ -35,10 +35,20 @@ class Balance(Base):
 
     def add_amount(self, amount: str) -> None:
         """Add amount to balance"""
+        if not is_valid_numeric_string(amount):
+            import structlog
+            logger = structlog.get_logger()
+            logger.error("Invalid amount for add_amount", address=self.address, ticker=self.ticker, amount=amount)
+            raise ValueError(f"Invalid amount: {amount}")
         self.balance = add_amounts(self.balance, amount)
 
     def subtract_amount(self, amount: str) -> bool:
         """Subtract amount, return False if insufficient"""
+        if not is_valid_numeric_string(amount):
+            import structlog
+            logger = structlog.get_logger()
+            logger.error("Invalid amount for subtract_amount", address=self.address, ticker=self.ticker, amount=amount)
+            raise ValueError(f"Invalid amount: {amount}")
         if compare_amounts(self.balance, amount) < 0:
             return False
         self.balance = subtract_amounts(self.balance, amount)

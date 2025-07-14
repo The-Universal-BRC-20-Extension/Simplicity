@@ -38,6 +38,19 @@ class OPIConfiguration(Base):
     def __repr__(self):
         return self.__str__()
 
+    def to_dict(self):
+        """Convert model to dictionary"""
+        return {
+            "id": self.id,
+            "opi_id": self.opi_id,
+            "is_enabled": self.is_enabled,
+            "version": self.version,
+            "description": self.description,
+            "configuration": self.configuration,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
     @validates("opi_id")
     def validate_opi_id(self, key, value):
         if not value or len(value) > 50:

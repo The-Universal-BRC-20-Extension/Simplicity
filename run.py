@@ -17,6 +17,16 @@ logger = structlog.get_logger()
 def start_indexer_process(max_blocks=None, continuous=False):
     """Starts the indexer in a separate process."""
     logger.info("Starting indexer process...", continuous=continuous)
+    
+    # ✅ CRITICAL: Register OPI implementations in this process context
+    from src.services.opi.implementations.opi_000 import Opi000Implementation
+    from src.services.opi.registry import opi_registry
+    
+    opi_registry.register_opi(Opi000Implementation())
+    logger.info("OPI implementations registered in indexer process", 
+                opi_count=len(opi_registry.list_opis()), 
+                opis=opi_registry.list_opis())
+    
     run_indexer(max_blocks=max_blocks, continuous=continuous)
 
 
@@ -44,6 +54,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.indexer_only:
+        # ✅ CRITICAL: Register OPI implementations for indexer-only mode too
+        from src.services.opi.implementations.opi_000 import Opi000Implementation
+        from src.services.opi.registry import opi_registry
+        
+        opi_registry.register_opi(Opi000Implementation())
+        logger.info("OPI implementations registered in indexer-only mode", 
+                    opi_count=len(opi_registry.list_opis()), 
+                    opis=opi_registry.list_opis())
+        
         run_indexer(max_blocks=args.max_blocks, continuous=args.continuous)
     else:
         indexer_process = multiprocessing.Process(

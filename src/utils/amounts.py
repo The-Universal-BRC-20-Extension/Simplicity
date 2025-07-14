@@ -176,3 +176,8 @@ def normalize_amount(amount_str: str) -> str:
         raise ValueError(f"Invalid amount format: {amount_str}")
 
     return normalized
+
+
+def is_valid_numeric_string(value):
+    """Return True if value is a string of digits (^[0-9]+$), False otherwise."""
+    return isinstance(value, str) and re.fullmatch(r'^[0-9]+$', value) is not None

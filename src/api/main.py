@@ -7,11 +7,16 @@ from fastapi.responses import JSONResponse
 
 from src.api.routers.brc20 import router as brc20_router
 from src.api.routers.opi import router as opi_router
-from src.api.routers.agent_communication import router as agent_comm_router
 from src.utils.logging import setup_logging
+from src.services.opi.implementations.opi_000 import Opi000Implementation
+from src.services.opi.registry import opi_registry
 
 setup_logging()
 logger = structlog.get_logger()
+
+# Register OPI implementations for API
+opi_registry.register_opi(Opi000Implementation())
+logger.info("OPI implementations registered for API", opi_count=len(opi_registry.list_opis()))
 
 app = FastAPI(
     title="Universal BRC-20 Indexer API",
@@ -30,8 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(brc20_router, tags=["BRC-20"])
-app.include_router(opi_router, tags=["OPI Framework"])  # ✅ NEW
-app.include_router(agent_comm_router, tags=["Agent Communication"])  # ✅ NEW
+app.include_router(opi_router, tags=["OPI Framework"])
 
 
 @app.exception_handler(Exception)

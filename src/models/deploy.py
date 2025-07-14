@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, JSON
 from sqlalchemy.sql import func
 
 from .base import Base
@@ -16,3 +16,7 @@ class Deploy(Base):
     deploy_timestamp = Column(DateTime, nullable=False)
     deployer_address = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=func.now())
+    
+    is_legacy_validated = Column(Boolean, nullable=False, default=False)
+    legacy_validation_result = Column(JSON, nullable=True)
+    legacy_validation_timestamp = Column(DateTime, nullable=True)

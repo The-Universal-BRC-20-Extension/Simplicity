@@ -27,6 +27,8 @@ from .bitcoin_rpc import BitcoinRPCService
 from .parser import BRC20Parser
 from .utxo_service import UTXOResolutionService
 from .validator import BRC20Validator
+from .legacy_token_service import LegacyTokenService
+from .token_supply_service import TokenSupplyService
 
 
 class ProcessingResult:
@@ -47,7 +49,14 @@ class BRC20Processor:
         self.db = db_session
         self.rpc = bitcoin_rpc
         self.parser = BRC20Parser()
-        self.validator = BRC20Validator(db_session)
+        
+        # Initialize legacy services
+        self.legacy_service = LegacyTokenService()
+        self.supply_service = TokenSupplyService(db_session)
+        
+        # Initialize validator with legacy service
+        self.validator = BRC20Validator(db_session, self.legacy_service)
+        
         self.utxo_service = UTXOResolutionService(bitcoin_rpc)
         self.logger = structlog.get_logger()
         self.current_block_timestamp = None  # ✅ NEW: Store current block timestamp
@@ -235,8 +244,12 @@ class BRC20Processor:
         Returns:
             ValidationResult with success/failure status
         """
+        # Add block_height to operation for legacy validation
+        operation_with_block_height = operation.copy()
+        operation_with_block_height["block_height"] = tx_info.get("block_height", 0)
+        
         validation_result = self.validator.validate_complete_operation(
-            operation,
+            operation_with_block_height,
             tx_info.get("vout", []),
             None,  # No input address required for deploy
         )
@@ -262,25 +275,58 @@ class BRC20Processor:
                     f"Invalid timestamp: {str(e)}",
                 )
             else:
+                # Store legacy validation result
+                legacy_validation_result = {
+                    "validated_at": datetime.utcnow().isoformat(),
+                    "legacy_exists": False,
+                    "validation_source": "OPI-LC"
+                }
+                
+                # Extract fields from either m/l or max/lim format
+                if "m" in operation:
+                    max_supply = operation["m"]
+                    limit_per_op = operation.get("l")
+                else:
+                    max_supply = operation["max"]
+                    limit_per_op = operation.get("lim")
+                
                 deploy = Deploy(
                     ticker=operation["tick"],
-                    max_supply=operation["m"],
-                    limit_per_op=operation.get("l"),
+                    max_supply=max_supply,
+                    limit_per_op=limit_per_op,
                     deploy_txid=tx_info["txid"],
                     deploy_height=tx_info.get("block_height", 0),
                     deploy_timestamp=deploy_timestamp,
                     deployer_address=deployer_address,
+                    is_legacy_validated=True,
+                    legacy_validation_result=legacy_validation_result,
+                    legacy_validation_timestamp=datetime.utcnow()
                 )
 
                 self.logger.info(
-                    "Processing deploy with Bitcoin timestamp",
+                    "Processing deploy with legacy validation",
                     ticker=operation["tick"],
                     txid=tx_info["txid"],
                     block_timestamp=self.current_block_timestamp,
                     deploy_timestamp=deploy_timestamp.isoformat(),
+                    legacy_validated=True
                 )
                 self.db.add(deploy)
                 self.db.flush()
+                
+                # Update supply tracking for the new token
+                try:
+                    self.supply_service.update_supply_tracking(operation["tick"])
+                    self.logger.info(
+                        "Supply tracking updated for new deploy",
+                        ticker=operation["tick"]
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        "Failed to update supply tracking for deploy",
+                        ticker=operation["tick"],
+                        error=str(e)
+                    )
 
         self.log_operation(
             operation_data=operation,
@@ -574,6 +620,12 @@ class BRC20Processor:
                 "Unable to resolve sender or recipient address",
             )
         else:
+            # Validate 'amt' is numeric before using
+            amt = operation.get('amt')
+            if not (isinstance(amt, str) and amt.isdigit()):
+                self.logger.error("Invalid 'amt' in transfer operation, must be numeric string", amt=amt, txid=tx_info.get("txid"))
+                amt = "0"  
+                operation['amt'] = amt
             validation_result = self.validator.validate_complete_operation(
                 operation, tx_info.get("vout", []), sender_address
             )
@@ -586,17 +638,19 @@ class BRC20Processor:
                 txid=tx_info["txid"],
             )
 
+        # Only update balances if amt is valid
+        if amt != "0":
             self.update_balance(
                 address=sender_address,
                 ticker=operation["tick"],
-                amount_delta=f"-{operation['amt']}",  # Negative for debit
+                amount_delta=f"-{amt}",  
                 operation_type="transfer_out",
             )
 
             self.update_balance(
                 address=recipient_address,
                 ticker=operation["tick"],
-                amount_delta=operation["amt"],
+                amount_delta=amt,
                 operation_type="transfer_in",
             )
 
@@ -630,12 +684,11 @@ class BRC20Processor:
             if txid is None or vout is None:
                 return None
 
-            # Appel avec gestion des erreurs
             try:
                 return self.utxo_service.get_input_address(txid, vout)
             except Exception as e:
                 self.logger.warning(
-                    "Erreur lors de la résolution de l'adresse d'entrée",
+                    "Error resolving input address",
                     txid=txid,
                     vout=vout,
                     error=str(e),
@@ -644,7 +697,7 @@ class BRC20Processor:
 
         except Exception as e:
             self.logger.warning(
-                "Erreur dans get_first_input_address",
+                "Error in get_first_input_address",
                 tx_id=tx_info.get("txid", "unknown"),
                 error=str(e),
             )
@@ -714,21 +767,24 @@ class BRC20Processor:
         - For transfer: sender -= amount, recipient += amount
         - Use string utilities to avoid overflow
         """
-        balance = Balance.get_or_create(self.db, address, ticker)
+        try:
+            balance = Balance.get_or_create(self.db, address, ticker)
 
-        if amount_delta.startswith("-"):
-            # Debit operation
-            amount = amount_delta[1:]  # Remove minus sign
-            if not balance.subtract_amount(amount):
-                raise BRC20Exception(
-                    BRC20ErrorCodes.INSUFFICIENT_BALANCE,
-                    f"Insufficient balance for {operation_type}",
-                )
-        else:
-            # Credit operation
-            balance.add_amount(amount_delta)
-
-        # Update timestamp is handled by the model
+            if amount_delta.startswith("-"):
+                # Debit operation
+                amount = amount_delta[1:]  # Remove minus sign
+                if not balance.subtract_amount(amount):
+                    raise BRC20Exception(
+                        BRC20ErrorCodes.INSUFFICIENT_BALANCE,
+                        f"Insufficient balance for {operation_type}",
+                    )
+            else:
+                # Credit operation
+                balance.add_amount(amount_delta)
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error("Failed to update balance", address=address, ticker=ticker, amount_delta=amount_delta, operation_type=operation_type, error=str(e))
+            raise
 
     def log_operation(
         self,
@@ -790,7 +846,6 @@ class BRC20Processor:
             # TRANSFER: apply regular rules (get actual sender address)
             from_address = self.get_first_input_address(tx_info)
 
-        # ✅ CRITICAL: Ensure block_hash is NEVER empty - authoritative source
         operation_block_hash = tx_info.get("block_hash", "")
         if not operation_block_hash:
             # This should NEVER happen - log error but don't fail processing
@@ -809,9 +864,9 @@ class BRC20Processor:
             txid=tx_info["txid"],
             vout_index=tx_info.get("vout_index", 0),
             block_height=tx_info.get("block_height", 0),
-            block_hash=operation_block_hash,  # ✅ GUARANTEED: Never empty
+            block_hash=operation_block_hash,  
             tx_index=tx_info.get("tx_index", 0),
-            timestamp=operation_timestamp,  # ✅ FIXED: Use Bitcoin block timestamp
+            timestamp=operation_timestamp,  
             operation=operation_data.get(
                 "op", "invalid"
             ),  # Default to 'invalid' for failed parsing
@@ -833,7 +888,7 @@ class BRC20Processor:
             is_marketplace=is_marketplace,
         )
 
-        # ✅ LOG: Confirm block_hash is properly stored during DB rebuild
+        # LOG: Confirm block_hash is properly stored during DB rebuild
         self.logger.debug(
             "Operation logged with block_hash",
             txid=operation.txid,
@@ -848,8 +903,13 @@ class BRC20Processor:
             is_valid=operation.is_valid,
         )
 
-        self.db.add(operation)
-        self.db.flush()  # Get ID without committing
+        try:
+            self.db.add(operation)
+            self.db.flush()  
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error("Failed to log operation", txid=operation.txid, error=str(e))
+            raise
 
     def resolve_transfer_addresses(self, tx_info: dict) -> Dict[str, Optional[str]]:
         """

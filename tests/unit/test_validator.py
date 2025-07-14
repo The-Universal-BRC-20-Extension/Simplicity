@@ -244,16 +244,20 @@ class TestBRC20Validator:
 
         assert address == "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 
-    def test_get_current_supply(self):
+    def test_get_current_supply(self, monkeypatch):
         """Test getting current supply"""
-        self.mock_db_session.query.return_value.filter.return_value.scalar.return_value = (  # noqa: E501
-            1000000
-        )
-        self.mock_db_session.func = Mock()
-        self.mock_db_session.BigInteger = Mock()
-
-        supply = self.validator.get_current_supply("OPQT")
-
+        from unittest.mock import Mock
+        from src.services.validator import BRC20Validator
+        validator = BRC20Validator(Mock())
+        # Patch the full query chain: query().filter().filter().scalar() -> '1000000'
+        mock_query = Mock()
+        mock_filter1 = Mock()
+        mock_filter2 = Mock()
+        mock_filter2.scalar.return_value = 1000000
+        mock_filter1.filter.return_value = mock_filter2
+        mock_query.filter.return_value = mock_filter1
+        validator.db.query.return_value = mock_query
+        supply = validator.get_current_supply("ORDI")
         assert supply == "1000000"
 
     def test_get_balance(self):

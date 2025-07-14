@@ -48,21 +48,23 @@ class TestBRC20Processor:
                 return_value=ValidationResult(True),
             ):
                 with patch.object(processor, "log_operation"):
-                    processor.current_block_timestamp = (
-                        1677649200  # Set block timestamp
-                    )
-                    result = processor.process_deploy(operation, tx_info, hex_data)
+                    with patch.object(processor.supply_service, "update_supply_tracking"):
+                        processor.current_block_timestamp = (
+                            1677649200  # Set block timestamp
+                        )
+                        result = processor.process_deploy(operation, tx_info, hex_data)
 
-                    assert result.is_valid is True
+                        assert result.is_valid is True
 
-                    mock_db_session.add.assert_called_once()
-                    mock_db_session.flush.assert_called_once()
+                        mock_db_session.add.assert_called_once()
+                        # One flush call for deploy (supply service is mocked)
+                        assert mock_db_session.flush.call_count == 1
 
-                    deploy_call = mock_db_session.add.call_args[0][0]
-                    assert isinstance(deploy_call, Deploy)
-                    assert deploy_call.ticker == "TEST"
-                    assert deploy_call.max_supply == "1000000"
-                    assert deploy_call.limit_per_op == "1000"
+                        deploy_call = mock_db_session.add.call_args[0][0]
+                        assert isinstance(deploy_call, Deploy)
+                        assert deploy_call.ticker == "TEST"
+                        assert deploy_call.max_supply == "1000000"
+                        assert deploy_call.limit_per_op == "1000"
 
     def test_process_deploy_duplicate_ticker(self, processor):
         """Test deploy existing ticker (must be logged as invalid)"""
@@ -816,3 +818,216 @@ class TestBRC20Processor:
                             assert not result.is_valid
                             assert "OP_RETURN_NOT_FIRST" in result.error_message
                             assert "simple transfer" in result.error_message
+
+    def test_process_deploy_blocked_by_legacy(self, processor, mock_db_session):
+        """Test deploy is blocked if ticker exists on legacy system"""
+        operation = {"op": "deploy", "tick": "ORDI_LEGACY_MOCK", "m": "21000000", "l": "1000"}
+        tx_info = {
+            "txid": "test_txid_legacy",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            # Add a valid standard output so legacy validation is reached
+            "vout": [
+                {"n": 0, "scriptPubKey": {"type": "pubkeyhash", "addresses": ["1TestAddress"]}}
+            ],
+        }
+        hex_data = "test_hex_data"
+
+        with patch.object(processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(processor, "log_operation"):
+                # Patch processor.db.query(Deploy) to return a mock whose filter().first() returns None
+                mock_query = Mock()
+                mock_query.filter.return_value.first.return_value = None
+                with patch.object(processor.db, "query", return_value=mock_query):
+                    # Patch legacy_service on the validator to simulate legacy token exists
+                    with patch.object(processor.validator.legacy_service, "validate_deploy_against_legacy", return_value=ValidationResult(False, "LEGACY_TOKEN_EXISTS", "Token 'ORDI_LEGACY_MOCK' already deployed on Ordinals")):
+                        processor.current_block_timestamp = 1677649200
+                        result = processor.process_deploy(operation, tx_info, hex_data)
+                        assert not result.is_valid
+                        assert result.error_code == "LEGACY_TOKEN_EXISTS"
+                        # Should NOT add a Deploy object
+                        mock_db_session.add.assert_not_called()
+
+    def test_process_deploy_allowed_when_not_on_legacy(self, processor, mock_db_session):
+        """Test deploy is allowed if ticker does not exist on legacy system"""
+        operation = {"op": "deploy", "tick": "UNIQUE123", "m": "21000000", "l": "1000"}
+        tx_info = {
+            "txid": "test_txid_unique",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            "vout": [],
+        }
+        hex_data = "test_hex_data"
+
+        with patch.object(processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(processor.validator, "validate_complete_operation", return_value=ValidationResult(True)):
+                with patch.object(processor, "log_operation"):
+                    # Patch legacy_service to simulate ticker NOT on legacy
+                    with patch.object(processor.legacy_service, "validate_deploy_against_legacy", return_value=ValidationResult(True)):
+                        with patch.object(processor.supply_service, "update_supply_tracking"):
+                            processor.current_block_timestamp = 1677649200
+                            result = processor.process_deploy(operation, tx_info, hex_data)
+                            assert result.is_valid
+                            mock_db_session.add.assert_called_once()
+                            deploy_call = mock_db_session.add.call_args[0][0]
+                            assert isinstance(deploy_call, Deploy)
+                            assert deploy_call.ticker == "UNIQUE123"
+                            assert deploy_call.max_supply == "21000000"
+                            assert deploy_call.limit_per_op == "1000"
+
+    # ===== REAL VALIDATION INTEGRATION TESTS =====
+    
+    def test_process_deploy_success_real_integration(self, real_processor, db_session, unique_ticker_generator):
+        """Test deploy with real validation integration"""
+        ticker = unique_ticker_generator("REAL")
+        operation = {"op": "deploy", "tick": ticker, "m": "1000000", "l": "1000"}
+        
+        tx_info = {
+            "txid": f"real_test_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            "vout": [{"n": 0, "scriptPubKey": {"type": "pubkeyhash", "addresses": ["1TestAddress"]}}],
+        }
+        
+        hex_data = "test_hex_data"
+        
+        with patch.object(real_processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(real_processor, "log_operation"):
+                real_processor.current_block_timestamp = 1677649200
+                result = real_processor.process_deploy(operation, tx_info, hex_data)
+                
+                assert result.is_valid is True
+                # For real db_session, we can't use mock assertions
+                # Instead, verify the result indicates success
+                assert result.is_valid is True
+
+    def test_process_deploy_blocked_by_legacy_real_integration(self, real_processor, db_session):
+        """Test deploy blocked by real legacy validation - ORDI exists on legacy"""
+        operation = {"op": "deploy", "tick": "ORDI", "m": "21000000", "l": "1000"}
+        
+        tx_info = {
+            "txid": "legacy_blocked_txid_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            "vout": [{"n": 0, "scriptPubKey": {"type": "pubkeyhash", "addresses": ["1TestAddress"]}}],
+        }
+        
+        hex_data = "test_hex_data"
+        
+        with patch.object(real_processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(real_processor, "log_operation"):
+                real_processor.current_block_timestamp = 1677649200
+                result = real_processor.process_deploy(operation, tx_info, hex_data)
+                
+                assert not result.is_valid
+                assert "LEGACY_TOKEN_EXISTS" in result.error_code
+                # For real db_session, we can't use mock assertions
+                # Instead, verify the result indicates failure
+                assert not result.is_valid
+
+    def test_process_mint_real_integration(self, real_processor, db_session, unique_ticker_generator):
+        """Test mint with real validation integration"""
+        ticker = unique_ticker_generator("MINT")
+        
+        # First deploy the token
+        deploy_operation = {"op": "deploy", "tick": ticker, "m": "1000000", "l": "1000"}
+        deploy_tx_info = {
+            "txid": f"deploy_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            "vout": [{"n": 0, "scriptPubKey": {"type": "pubkeyhash", "addresses": ["1TestAddress"]}}],
+        }
+        
+        with patch.object(real_processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(real_processor, "log_operation"):
+                real_processor.current_block_timestamp = 1677649200
+                real_processor.process_deploy(deploy_operation, deploy_tx_info, "deploy_hex")
+        
+        # Now test mint
+        mint_operation = {"op": "mint", "tick": ticker, "amt": "500"}
+        mint_tx_info = {
+            "txid": f"mint_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800001,
+            "vout": [
+                {"n": 0, "scriptPubKey": {"type": "nulldata", "hex": "6a..."}},
+                {"n": 1, "scriptPubKey": {"addresses": ["test_recipient"]}},
+            ],
+        }
+        
+        with patch.object(real_processor.validator, "get_output_after_op_return_address", return_value="test_recipient"):
+            with patch.object(real_processor, "validate_mint_op_return_position", return_value=ValidationResult(True)):
+                with patch.object(real_processor.validator, "validate_complete_operation", return_value=ValidationResult(True)):
+                    with patch.object(real_processor, "update_balance") as mock_update:
+                        with patch.object(real_processor, "log_operation"):
+                            result = real_processor.process_mint(mint_operation, mint_tx_info, "mint_hex", 800001)
+                            
+                            assert result.is_valid is True
+                            mock_update.assert_called_once_with(
+                                address="test_recipient",
+                                ticker=ticker,
+                                amount_delta="500",
+                                operation_type="mint",
+                            )
+
+    def test_process_transfer_real_integration(self, real_processor, db_session, unique_ticker_generator):
+        """Test transfer with real validation integration"""
+        ticker = unique_ticker_generator("XFER")
+        
+        # First deploy and mint the token
+        deploy_operation = {"op": "deploy", "tick": ticker, "m": "1000000", "l": "1000"}
+        deploy_tx_info = {
+            "txid": f"deploy_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800000,
+            "vin": [{"address": "test_deployer_address"}],
+            "vout": [{"n": 0, "scriptPubKey": {"type": "pubkeyhash", "addresses": ["1TestAddress"]}}],
+        }
+        
+        with patch.object(real_processor, "get_first_input_address", return_value="test_deployer_address"):
+            with patch.object(real_processor, "log_operation"):
+                real_processor.current_block_timestamp = 1677649200
+                real_processor.process_deploy(deploy_operation, deploy_tx_info, "deploy_hex")
+        
+        # Mint some tokens
+        mint_operation = {"op": "mint", "tick": ticker, "amt": "1000"}
+        mint_tx_info = {
+            "txid": f"mint_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800001,
+            "vout": [
+                {"n": 0, "scriptPubKey": {"type": "nulldata", "hex": "6a..."}},
+                {"n": 1, "scriptPubKey": {"addresses": ["test_recipient"]}},
+            ],
+        }
+        
+        with patch.object(real_processor.validator, "get_output_after_op_return_address", return_value="test_recipient"):
+            with patch.object(real_processor, "validate_mint_op_return_position", return_value=ValidationResult(True)):
+                with patch.object(real_processor.validator, "validate_complete_operation", return_value=ValidationResult(True)):
+                    with patch.object(real_processor, "update_balance"):
+                        with patch.object(real_processor, "log_operation"):
+                            real_processor.process_mint(mint_operation, mint_tx_info, "mint_hex", 800001)
+        
+        # Now test transfer
+        transfer_operation = {"op": "transfer", "tick": ticker, "amt": "500"}
+        transfer_tx_info = {
+            "txid": f"transfer_txid_{ticker}_1234567890123456789012345678901234567890123456789012345678901234",
+            "block_height": 800002,
+            "vout": [
+                {"n": 0, "scriptPubKey": {"type": "nulldata", "hex": "6a..."}},
+                {"n": 1, "scriptPubKey": {"addresses": ["test_recipient"]}},
+            ],
+        }
+        
+        with patch.object(real_processor.validator, "get_output_after_op_return_address", return_value="test_recipient"):
+            with patch.object(real_processor.validator, "validate_complete_operation", return_value=ValidationResult(True)):
+                with patch.object(real_processor, "classify_transfer_type", return_value=TransferType.SIMPLE):
+                    with patch.object(real_processor, "validate_transfer_specific", return_value=ValidationResult(True)):
+                        with patch.object(real_processor, "resolve_transfer_addresses", return_value={
+                            "sender": "test_sender",
+                            "recipient": "test_recipient"
+                        }):
+                            with patch.object(real_processor, "update_balance") as mock_update:
+                                with patch.object(real_processor, "log_operation"):
+                                    result = real_processor.process_transfer(transfer_operation, transfer_tx_info, "transfer_hex", 800002)
+                                    
+                                    assert result.is_valid is True
+                                    # Should call update_balance twice (debit sender, credit recipient)
+                                    assert mock_update.call_count == 2

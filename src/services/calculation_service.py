@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 
 import structlog
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, Numeric
 from sqlalchemy.orm import Session
 
 from src.api.models import Op
@@ -13,6 +13,11 @@ from src.utils.amounts import compare_amounts
 
 logger = structlog.get_logger()
 
+
+def get_regex_operator(db):
+    if hasattr(db.bind, 'dialect') and db.bind.dialect.name == 'postgresql':
+        return '~'
+    return 'regexp'
 
 class BRC20CalculationService:
     def __init__(self, db_session: Session):
@@ -56,11 +61,11 @@ class BRC20CalculationService:
 
     def _calculate_ticker_stats(self, deploy: Deploy) -> Dict:
         """Calculate statistics for a deploy (internal helper)"""
-        from sqlalchemy import Numeric
-
+        regex_op = get_regex_operator(self.db)
         current_supply = (
             self.db.query(func.coalesce(func.sum(Balance.balance.cast(Numeric)), 0))
             .filter(Balance.ticker == deploy.ticker, Balance.balance != "0")
+            .filter(Balance.balance.op(regex_op)('^[0-9]+$'))  # Cross-DB regex: only numeric balances
             .scalar()
             or "0"
         )
@@ -68,6 +73,7 @@ class BRC20CalculationService:
         holder_count = (
             self.db.query(Balance)
             .filter(Balance.ticker == deploy.ticker, Balance.balance != "0")
+            .filter(Balance.balance.op(regex_op)('^[0-9]+$'))  # Cross-DB regex: only numeric balances
             .count()
         )
 
@@ -92,11 +98,12 @@ class BRC20CalculationService:
         try:
             normalized_ticker = ticker.upper()
 
-            from sqlalchemy import Numeric
+            regex_op = get_regex_operator(self.db)
 
             query = (
                 self.db.query(Balance)
                 .filter(Balance.ticker == normalized_ticker, Balance.balance != "0")
+                .filter(Balance.balance.op(regex_op)('^[0-9]+$'))  # Cross-DB regex: only numeric balances
                 .order_by(Balance.balance.cast(Numeric).desc())
             )
 
@@ -207,11 +214,12 @@ class BRC20CalculationService:
     ) -> Dict:
         """Get balances for address with latest transfer info"""
         try:
-            from sqlalchemy import Numeric
+            regex_op = get_regex_operator(self.db)
 
             query = (
                 self.db.query(Balance)
                 .filter(Balance.address == address, Balance.balance != "0")
+                .filter(Balance.balance.op(regex_op)('^[0-9]+$'))  # Cross-DB regex: only numeric balances
                 .order_by(Balance.balance.cast(Numeric).desc())
             )
 

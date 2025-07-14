@@ -31,7 +31,10 @@ def main(max_blocks=None, continuous=False):
     try:
         # ✅ NEW: Register OPI implementations
         opi_registry.register_opi(Opi000Implementation())
-        logger.info("OPI implementations registered", opi_count=len(opi_registry.list_opis()))
+        logger.info("OPI implementations registered", opi_count=len(opi_registry.list_opis()), opis=opi_registry.list_opis())
+
+        # Log registry contents for debugging
+        logger.info("OPI registry contents", opis=opi_registry.list_opis())
 
         # Initialize services
         db_session: Session = next(get_db())

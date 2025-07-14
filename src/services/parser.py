@@ -331,25 +331,40 @@ class BRC20Parser:
         self, operation: Dict[str, Any]
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """Validate deploy operation fields"""
-        # Required: max supply
-        max_supply = operation.get("m")
-        if max_supply is None:
-            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing max supply field 'm'"
+        # Check for invalid mixed formats
+        has_m_format = "m" in operation
+        has_l_format = "l" in operation
+        has_max_format = "max" in operation
+        has_lim_format = "lim" in operation
+        
+        if has_m_format and has_lim_format:
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Cannot use 'm' with 'lim' fields"
+        
+        if has_max_format and has_l_format:
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Cannot use 'max' with 'l' fields"
+        
+        # Use m/l format (preferred) or max/lim format (legacy)
+        if has_m_format:
+            max_supply = operation.get("m")
+            limit_per_op = operation.get("l")
+        elif has_max_format:
+            max_supply = operation.get("max")
+            limit_per_op = operation.get("lim")
+        else:
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing max supply field (use 'm' or 'max')"
 
         if not isinstance(max_supply, str):
             return (
                 False,
                 BRC20ErrorCodes.INVALID_AMOUNT,
-                "Max supply 'm' must be string",
+                "Max supply must be string",
             )
 
-        # Optional: limit per operation
-        limit_per_op = operation.get("l")
         if limit_per_op is not None and not isinstance(limit_per_op, str):
             return (
                 False,
                 BRC20ErrorCodes.INVALID_AMOUNT,
-                "Limit per operation 'l' must be string",
+                "Limit per operation must be string",
             )
 
         return True, None, None
