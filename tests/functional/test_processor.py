@@ -78,7 +78,6 @@ class TestBRC20Processor:
                     assert deploy_call.max_supply == "1000000"
                     assert deploy_call.limit_per_op == "1000"
 
-
     def test_process_mint_within_limits(self, processor, mock_db_session):
         operation = {"op": "mint", "tick": "TEST", "amt": "500"}
 
@@ -362,7 +361,6 @@ class TestBRC20Processor:
                                 assert credit_call[1]["amount_delta"] == "100"
                                 assert credit_call[1]["op_type"] == "transfer_in"
 
-
     def test_process_transfer_exceeds_mint_limit(self, processor, mock_db_session):
         operation = {"op": "transfer", "tick": "TEST", "amt": "5000"}
 
@@ -444,8 +442,6 @@ class TestBRC20Processor:
 
             address = processor.validator.get_first_standard_output_address(tx_outputs)
             assert address is None
-
-
 
     def test_log_all_operations(self, processor, mock_db_session):
         operation_data = {"op": "mint", "tick": "TEST", "amt": "100"}

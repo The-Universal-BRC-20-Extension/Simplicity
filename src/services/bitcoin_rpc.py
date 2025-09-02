@@ -109,7 +109,7 @@ class BitcoinRPCService:
         if not self.rpc_password:
             raise ValueError("Bitcoin RPC password is required")
 
-        if self.rpc_password == "your_rpc_password_here": # nosec B105
+        if self.rpc_password == "your_rpc_password_here":  # nosec B105
             raise ValueError(
                 "Bitcoin RPC password is set to placeholder value. "
                 "For rpcauth setup, use the actual password (not the hash). "

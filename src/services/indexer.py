@@ -909,7 +909,7 @@ class IndexerService:
             )
 
     def get_last_processed_height(self) -> int:
-        
+
         try:
             last_block = self.db.query(ProcessedBlock).order_by(desc(ProcessedBlock.height)).first()
             return last_block.height if last_block else settings.START_BLOCK_HEIGHT - 1
@@ -918,7 +918,7 @@ class IndexerService:
             return settings.START_BLOCK_HEIGHT - 1
 
     def is_block_processed(self, height: int, block_hash: str) -> bool:
-        
+
         try:
             processed_block = self.db.query(ProcessedBlock).filter_by(height=height).first()
             return processed_block is not None and processed_block.block_hash == block_hash

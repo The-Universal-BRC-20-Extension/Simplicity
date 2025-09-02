@@ -504,7 +504,6 @@ class TestIntegration:
             "vout": [],
         }
 
-
         with patch.object(
             processor.parser,
             "extract_op_return_data",

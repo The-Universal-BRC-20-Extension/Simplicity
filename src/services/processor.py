@@ -641,7 +641,7 @@ class BRC20Processor:
 
         structure_validation = self.parser.validate_multi_transfer_structure(tx, transfer_ops)
         if not structure_validation.is_valid:
-            op_data = {"op": "transfer"} 
+            op_data = {"op": "transfer"}
             self.log_operation(
                 op_data,
                 structure_validation,
@@ -658,7 +658,7 @@ class BRC20Processor:
 
         meta_validation, ticker, total_amount = self.parser.validate_multi_transfer_meta_rules(parsed_ops)
         if not meta_validation.is_valid:
-            op_data = {"op": "transfer", "tick": "multiple"} 
+            op_data = {"op": "transfer", "tick": "multiple"}
             self.log_operation(op_data, meta_validation, tx_info, transfer_ops, is_multi_transfer=True)
             return self._create_processing_result(tx_info["txid"], meta_validation, is_multi=True, op_data=op_data)
 
