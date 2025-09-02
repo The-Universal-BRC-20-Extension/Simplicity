@@ -1,6 +1,6 @@
 from pydantic import validator
 from pydantic_settings import BaseSettings
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, ClassVar
 
 
 class Settings(BaseSettings):
@@ -71,13 +71,18 @@ class Settings(BaseSettings):
     LOG_MARKETPLACE_METRICS: bool = True
     VALIDATE_PROCESSING_CONSISTENCY: bool = True
 
-    # Marketplace prioritization settings (MANDATORY)
-    ENABLE_MARKETPLACE_PRIORITIZATION: bool = True
-    ENABLE_DEFERRED_COMMIT: bool = True
+    # OPI Configuration
+    ENABLE_OPI: bool = False
+    STOP_ON_OPI_ERROR: bool = True
+
+    # Enabled OPIs: operation name -> processor class import path
+    ENABLED_OPIS: ClassVar[Dict[str, str]] = {
+        "test_opi": "src.opi.operations.test_opi.processor.TestOPIProcessor",
+    }
 
     class Config:
         env_file = ".env"
         extra = "ignore"
 
 
-settings = Settings()
+settings = Settings()   

@@ -27,10 +27,6 @@ class TestIntegration:
         return BRC20Processor(mock_db_session, mock_bitcoin_rpc)
 
     def test_complete_token_lifecycle(self, processor, mock_db_session):
-        """
-        Complete test: Deploy -> Mint -> Transfer
-        Verify balance consistency at each step
-        """
         # Step 1: Deploy
         deploy_operation = {"op": "deploy", "tick": "TEST", "m": "1000000", "l": "1000"}
 
@@ -195,7 +191,6 @@ class TestIntegration:
                                 assert credit_call[1]["op_type"] == "transfer_in"
 
     def test_multiple_mints_same_block(self, processor, mock_db_session):
-        """Test multiple mints of same ticker in one block"""
         mint_operation = {"op": "mint", "tick": "TEST", "amt": "100"}
 
         mint_tx1 = {
@@ -266,7 +261,6 @@ class TestIntegration:
                             assert second_call[1]["op_type"] == "mint"
 
     def test_transfer_entire_balance(self, processor, mock_db_session):
-        """Test transfer of complete balance"""
         transfer_operation = {"op": "transfer", "tick": "TEST", "amt": "1000"}
 
         transfer_tx = {
@@ -339,10 +333,6 @@ class TestIntegration:
                                     assert credit_call[1]["op_type"] == "transfer_in"
 
     def test_transfer_amount_exceeding_mint_limit(self, processor, mock_db_session):
-        """
-        CRITICAL: Test transfer of amount > mint limit
-        Example: limit=1000, balance=5000, transfer=3000 (must PASS)
-        """
         transfer_operation = {"op": "transfer", "tick": "TEST", "amt": "3000"}
 
         transfer_tx = {
@@ -415,7 +405,7 @@ class TestIntegration:
                                     assert credit_call[1]["op_type"] == "transfer_in"
 
     def test_invalid_operations_logged(self, processor, mock_db_session):
-        """Test invalid operations are properly logged"""
+
         operation_data = {"op": "mint", "tick": "INVALID", "amt": "100"}
         validation_result = ValidationResult(False, "TICKER_NOT_DEPLOYED", "Ticker not deployed")
         tx_info = {
@@ -454,7 +444,7 @@ class TestIntegration:
                 assert operation_call.error_message == "Ticker not deployed"
 
     def test_complex_transaction_processing(self, processor, mock_db_session):
-        """Test processing of complex transaction with multiple considerations"""
+
         tx = {
             "txid": "complex_txid",
             "block_height": 800000,
@@ -492,7 +482,7 @@ class TestIntegration:
                         with patch.object(processor, "process_transfer") as mock_process:
                             mock_process.return_value = ValidationResult(True)
 
-                            result = processor.process_transaction(
+                            result, _, _ = processor.process_transaction(
                                 tx,
                                 tx.get("block_height"),
                                 tx_index=0,
@@ -506,7 +496,7 @@ class TestIntegration:
                             mock_process.assert_called_once()
 
     def test_error_handling_during_processing(self, processor, mock_db_session):
-        """Test error handling during operation processing"""
+
         tx = {
             "txid": "error_txid",
             "block_height": 800000,
@@ -514,8 +504,6 @@ class TestIntegration:
             "vout": [],
         }
 
-        # Block info for test context - removed unused variable
-        # block_info = {"height": 800000, "hash": "block_hash"}
 
         with patch.object(
             processor.parser,
@@ -545,7 +533,7 @@ class TestIntegration:
                             "process_transfer",
                             side_effect=Exception("Processing error"),
                         ):
-                            result = processor.process_transaction(
+                            result, _, _ = processor.process_transaction(
                                 tx,
                                 tx.get("block_height"),
                                 tx_index=0,

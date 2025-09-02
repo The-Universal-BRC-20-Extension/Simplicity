@@ -10,12 +10,11 @@ from src.models.transaction import BRC20Operation
 from src.services.bitcoin_rpc import BitcoinRPCService
 from src.services.processor import BRC20Processor
 from src.services.validator import ValidationResult
-from src.utils.exceptions import BRC20Exception, TransferType
+from src.utils.exceptions import TransferType
 from datetime import datetime, timezone
 
 
 def create_mock_deploy(ticker="TEST", max_supply="1000000", limit_per_op="1000"):
-    """Create a mock Deploy object for testing"""
     deploy = Mock(spec=Deploy)
     deploy.ticker = ticker.upper()
     deploy.max_supply = max_supply
@@ -28,7 +27,6 @@ def create_mock_deploy(ticker="TEST", max_supply="1000000", limit_per_op="1000")
 
 
 def create_mock_balance(address="test_address", ticker="TEST", balance="1000"):
-    """Create a mock Balance object for testing"""
     balance_obj = Mock(spec=Balance)
     balance_obj.address = address
     balance_obj.ticker = ticker.upper()
@@ -80,8 +78,6 @@ class TestBRC20Processor:
                     assert deploy_call.max_supply == "1000000"
                     assert deploy_call.limit_per_op == "1000"
 
-    def test_process_deploy_duplicate_ticker(self, processor):
-        """Test deploy existing ticker (must be logged as invalid)"""
 
     def test_process_mint_within_limits(self, processor, mock_db_session):
         operation = {"op": "mint", "tick": "TEST", "amt": "500"}
@@ -138,12 +134,6 @@ class TestBRC20Processor:
                                     txid="test_txid",
                                     intermediate_balances={},
                                 )
-
-    def test_process_mint_exceeds_supply(self, processor):
-        """Test mint exceeds supply"""
-
-    def test_process_mint_exceeds_per_op_limit(self, processor):
-        """Test mint exceeds per-operation limit"""
 
     def test_mint_op_return_position_before_block_height(self, processor):
         operation = {"op": "mint", "tick": "TEST", "amt": "500"}
@@ -350,7 +340,6 @@ class TestBRC20Processor:
                     ):
                         with patch.object(processor, "update_balance") as mock_update:
                             with patch.object(processor, "log_operation"):
-                                """Process transfer and verify balance updates"""
                                 validation_result = ValidationResult(True)
                                 processor.process_transfer(
                                     operation,
@@ -373,8 +362,6 @@ class TestBRC20Processor:
                                 assert credit_call[1]["amount_delta"] == "100"
                                 assert credit_call[1]["op_type"] == "transfer_in"
 
-    def test_process_transfer_insufficient_balance(self, processor):
-        """Test transfer insufficient balance"""
 
     def test_process_transfer_exceeds_mint_limit(self, processor, mock_db_session):
         operation = {"op": "transfer", "tick": "TEST", "amt": "5000"}
@@ -446,8 +433,19 @@ class TestBRC20Processor:
         address = processor.validator.get_first_standard_output_address(tx_outputs)
         assert address is None
 
-    def test_atomic_rollback(self, processor):
-        """Test rollback on error during processing"""
+    def test_allocation_multiple_outputs(self, processor):
+        tx_outputs = [
+            {"scriptPubKey": {"hex": "76a914" + "0" * 40 + "88ac"}},
+            {"scriptPubKey": {"hex": "76a914" + "1" * 40 + "88ac"}},
+        ]
+
+        with patch("src.utils.bitcoin.extract_address_from_script") as mock_extract:
+            mock_extract.side_effect = ["first_address", "second_address"]
+
+            address = processor.validator.get_first_standard_output_address(tx_outputs)
+            assert address is None
+
+
 
     def test_log_all_operations(self, processor, mock_db_session):
         operation_data = {"op": "mint", "tick": "TEST", "amt": "100"}
@@ -508,8 +506,8 @@ class TestBRC20Processor:
 
     def test_update_balance_insufficient_funds(self, processor, mock_db_session):
         with patch.object(processor.validator, "get_balance", return_value=Decimal("50")):
-            with pytest.raises(BRC20Exception, match="Insufficient balance"):
-                processor.update_balance("test_address", "TEST", "-100", "transfer_out", "test_txid")
+            result = processor.update_balance("test_address", "TEST", "-100", "transfer_out", "test_txid")
+            assert result is False
 
     def test_classify_transfer_type_simple(self, processor):
         tx_info = {
@@ -616,6 +614,7 @@ class TestBRC20Processor:
                             processing_time = time.time() - start_time
 
                             assert processing_time < 0.1
+                            result, _, _ = result
                             assert not result.is_valid
                             assert not result.is_valid
 
@@ -768,6 +767,7 @@ class TestBRC20Processor:
                                             "test_block_hash",
                                         )
 
+                                        result, _, _ = result
                                         assert result.is_valid
                                         assert result.error_message is None
 
@@ -835,4 +835,5 @@ class TestBRC20Processor:
 
                             result = processor.process_transaction(simple_tx, 901350, 1, 1677649200, "test_block_hash")
 
+                            result, _, _ = result
                             assert not result.is_valid

@@ -64,7 +64,7 @@ def test_non_brc20_op_return_handling(processor):
         "vin": [],
     }
 
-    result = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
+    result, _, _ = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
 
     assert not result.operation_found
     assert not result.is_valid
@@ -95,7 +95,7 @@ def test_valid_json_invalid_protocol_handling(processor):
         "vin": [],
     }
 
-    result = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
+    result, _, _ = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
 
     assert not result.operation_found
     assert not result.is_valid
@@ -123,7 +123,7 @@ def test_non_json_op_return_handling(processor):
         "vin": [],
     }
 
-    result = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
+    result, _, _ = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
 
     assert not result.operation_found
     assert not result.is_valid
@@ -178,7 +178,7 @@ def test_valid_brc20_op_is_processed(processor):
     processor.validator.validate_complete_operation = MagicMock(return_value=ValidationResult(True, None, None))
     processor.process_deploy = MagicMock()
 
-    result = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
+    result, _, _ = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  
 
     assert result.operation_found
     assert result.is_valid
@@ -202,7 +202,7 @@ def test_no_op_return_handling(processor):
         "vin": [],
     }
 
-    result = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
+    result, _, _ = processor.process_transaction(tx_info, 100, 0, 1609459200, "test_block_hash")  # 2021-01-01 timestamp
 
     assert not result.operation_found
     assert not result.is_valid
