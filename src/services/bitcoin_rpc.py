@@ -61,7 +61,7 @@ def retry_on_rpc_error(max_retries: int = 3, base_delay: float = 1.0, max_delay:
                         break
 
                     delay = min(base_delay * (2**attempt), max_delay)
-                    jitter = random.uniform(0, delay * 0.1)
+                    jitter = random.uniform(0, delay * 0.1)  # nosec B311
                     actual_delay = delay + jitter
 
                     logger.info(
@@ -109,7 +109,7 @@ class BitcoinRPCService:
         if not self.rpc_password:
             raise ValueError("Bitcoin RPC password is required")
 
-        if self.rpc_password == "your_rpc_password_here":
+        if self.rpc_password == "your_rpc_password_here":  # nosec B105
             raise ValueError(
                 "Bitcoin RPC password is set to placeholder value. "
                 "For rpcauth setup, use the actual password (not the hash). "

@@ -1,5 +1,5 @@
 """
-BRC-20 Exception handling and standardized error codes.
+BRC-20 Exception handling and standardized error codes
 """
 
 from enum import Enum
@@ -50,7 +50,6 @@ class BRC20ErrorCodes:
 
 
 class TransferType(Enum):
-    """Transfer type classification for optimization"""
 
     SIMPLE = "simple"
     MARKETPLACE = "marketplace"
@@ -59,7 +58,6 @@ class TransferType(Enum):
 
 
 class ValidationResult:
-    """Result of a validation operation"""
 
     def __init__(self, is_valid: bool, error_code: str = None, error_message: str = None):
         self.is_valid = is_valid
@@ -76,7 +74,6 @@ class ValidationResult:
 
 
 class BRC20Exception(Exception):
-    """Base exception for BRC-20 operations"""
 
     def __init__(self, error_code: str, message: str):
         self.error_code = error_code
@@ -85,7 +82,6 @@ class BRC20Exception(Exception):
 
 
 class IndexerError(Exception):
-    """Exception raised for indexer-specific errors"""
 
     def __init__(self, message: str):
         self.message = message
@@ -96,3 +92,26 @@ class ValidationError(Exception):
     """Custom exception for validation errors"""
 
     pass
+
+
+class ProcessingResult:
+
+    def __init__(
+        self,
+        operation_found=False,
+        is_valid=False,
+        error_message=None,
+        error_code=None,
+        operation_type=None,
+        ticker=None,
+        amount=None,
+        txid=None,
+    ):
+        self.operation_found = operation_found
+        self.is_valid = is_valid
+        self.error_message = error_message
+        self.error_code = error_code
+        self.operation_type = operation_type
+        self.ticker = ticker
+        self.amount = amount
+        self.txid = txid

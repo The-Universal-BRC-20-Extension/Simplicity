@@ -1,8 +1,10 @@
 import json
 import structlog
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
+from decimal import Decimal
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.decl_api import DeclarativeMeta
 from .bitcoin_rpc import BitcoinRPCService
 from .parser import BRC20Parser
 from .validator import BRC20Validator
@@ -11,27 +13,20 @@ from src.models.balance import Balance
 from src.models.deploy import Deploy
 from src.models.transaction import BRC20Operation
 from src.utils.exceptions import (
-    BRC20Exception,
     BRC20ErrorCodes,
     ValidationResult,
     TransferType,
+    ProcessingResult,
 )
 from src.utils.bitcoin import (
     extract_signature_from_input,
     is_sighash_single_anyonecanpay,
 )
-
-
-class ProcessingResult:
-    def __init__(self):
-        self.operation_found = False
-        self.is_valid = False
-        self.error_message = None
-        self.error_code = None
-        self.operation_type = None
-        self.ticker = None
-        self.amount = None
-        self.txid = None
+from src.opi.contracts import (
+    IntermediateState,
+    Context,
+)
+from src.opi.registry import OPIRegistry
 
 
 class BRC20Processor:
@@ -44,6 +39,7 @@ class BRC20Processor:
         self.logger = structlog.get_logger()
         self.current_block_timestamp = None
         self._pending_balance_updates = {}
+        self.opi_registry: Optional[OPIRegistry] = None
 
     def _convert_block_timestamp(self, block_timestamp: int) -> datetime:
         if not isinstance(block_timestamp, int) or block_timestamp <= 0:
@@ -57,27 +53,29 @@ class BRC20Processor:
         tx_index: int,
         block_timestamp: int,
         block_hash: str,
-        intermediate_balances=None,
-        intermediate_total_minted=None,
-        intermediate_deploys=None,
-    ) -> ProcessingResult:
+        intermediate_state: IntermediateState = None,
+    ) -> Tuple[ProcessingResult, List[DeclarativeMeta], List[Any]]:
+        if intermediate_state is None:
+            intermediate_state = IntermediateState()
+
         multi_transfer_ops = self.parser.extract_multi_transfer_op_returns(tx)
         if len(multi_transfer_ops) > 1:
-            return self.process_multi_transfer(
+            result = self.process_multi_transfer(
                 tx,
                 block_height,
                 tx_index,
                 block_timestamp,
                 block_hash,
                 multi_transfer_ops,
-                intermediate_balances,
+                intermediate_state.balances,
             )
+            return result, [], []
 
         result = ProcessingResult()
         result.txid = tx.get("txid", "unknown")
         hex_data, vout_index = self.parser.extract_op_return_data(tx)
         if not hex_data:
-            return result
+            return result, [], []
         if vout_index is None:
             vout_index = 0
         parse_result = self.parser.parse_brc20_operation(hex_data)
@@ -102,7 +100,7 @@ class BRC20Processor:
                     tx_info=tx,
                     raw_op=hex_data,
                 )
-            return result
+            return result, [], []
         try:
             tx.update(
                 {
@@ -119,51 +117,101 @@ class BRC20Processor:
                 operation_data["tick"] = operation_data["tick"].upper()
             op_type = operation_data.get("op")
             sender_address = self.get_first_input_address(tx)
-            validation_result = self.validator.validate_complete_operation(
-                operation_data,
-                tx.get("vout", []),
-                sender_address,
-                intermediate_balances=intermediate_balances,
-                intermediate_total_minted=intermediate_total_minted,
-                intermediate_deploys=intermediate_deploys,
-            )
-            is_marketplace = False
-            if validation_result.is_valid:
-                if op_type == "deploy":
-                    self.process_deploy(operation_data, tx, intermediate_deploys=intermediate_deploys)
-                elif op_type == "mint":
-                    self.process_mint(
-                        operation_data,
-                        tx,
-                        intermediate_balances=intermediate_balances,
-                        intermediate_total_minted=intermediate_total_minted,
-                        intermediate_deploys=intermediate_deploys,
+            tx_info = {
+                "txid": tx.get("txid"),
+                "block_height": block_height,
+                "block_hash": block_hash,
+                "tx_index": tx_index,
+                "vout_index": vout_index,
+                "block_timestamp": block_timestamp,
+                "sender_address": sender_address,
+                "raw_op_return": hex_data,
+            }
+
+            if op_type in ["deploy", "mint", "transfer"]:
+                validation_result = self.validator.validate_complete_operation(
+                    operation_data,
+                    tx.get("vout", []),
+                    sender_address,
+                    intermediate_balances=intermediate_state.balances,
+                    intermediate_total_minted=intermediate_state.total_minted,
+                    intermediate_deploys=intermediate_state.deploys,
+                )
+
+                if validation_result.is_valid:
+                    if op_type == "deploy":
+                        self.process_deploy(operation_data, tx, intermediate_deploys=intermediate_state.deploys)
+                    elif op_type == "mint":
+                        self.process_mint(
+                            operation_data,
+                            tx,
+                            intermediate_balances=intermediate_state.balances,
+                            intermediate_total_minted=intermediate_state.total_minted,
+                            intermediate_deploys=intermediate_state.deploys,
+                        )
+                    elif op_type == "transfer":
+                        if self.classify_transfer_type(tx, block_height) == TransferType.MARKETPLACE:
+                            is_marketplace = True
+                        validation_result = self.process_transfer(
+                            operation_data,
+                            tx,
+                            validation_result,
+                            hex_data,
+                            block_height,
+                            intermediate_balances=intermediate_state.balances,
+                        )
+
+                result.is_valid = validation_result.is_valid
+                result.error_code = validation_result.error_code
+                result.error_message = validation_result.error_message
+                result.operation_type = op_type
+                result.ticker = operation_data.get("tick")
+                result.amount = operation_data.get("amt")
+
+                self.log_operation(
+                    op_data=operation_data,
+                    val_res=validation_result,
+                    tx_info=tx,
+                    raw_op=hex_data,
+                    json_op=json.dumps(operation_data),
+                    is_mkt=op_type == "transfer"
+                    and self.classify_transfer_type(tx, block_height) == TransferType.MARKETPLACE,
+                )
+
+                return result, [], []
+
+            elif self.opi_registry and self.opi_registry.has_processor(op_type):
+                context = Context(intermediate_state, self.validator)
+                processor = self.opi_registry.get_processor(op_type, context)
+
+                try:
+                    result, state = processor.process_op(operation_data, tx_info)
+
+                    for mutation in state.state_mutations:
+                        mutation(intermediate_state)
+
+                    for obj in state.orm_objects:
+                        self.db.add(obj)
+
+                    return result, state.orm_objects, []
+                except Exception as e:
+                    self.logger.error("OPI processing failed", op_type=op_type, txid=tx_info.get("txid"), error=str(e))
+                    return (
+                        ProcessingResult(
+                            operation_found=True, is_valid=False, error_message=f"OPI processing failed: {str(e)}"
+                        ),
+                        [],
+                        [],
                     )
-                elif op_type == "transfer":
-                    if self.classify_transfer_type(tx, block_height) == TransferType.MARKETPLACE:
-                        is_marketplace = True
-                    validation_result = self.process_transfer(
-                        operation_data,
-                        tx,
-                        validation_result,
-                        hex_data,
-                        block_height,
-                        intermediate_balances=intermediate_balances,
-                    )
-            result.is_valid = validation_result.is_valid
-            result.error_code = validation_result.error_code
-            result.error_message = validation_result.error_message
-            result.operation_type = op_type
-            result.ticker = operation_data.get("tick")
-            result.amount = operation_data.get("amt")
-            self.log_operation(
-                operation_data,
-                validation_result,
-                tx,
-                hex_data,
-                json.dumps(operation_data),
-                is_marketplace,
-            )
+            else:
+                self.logger.warning("Unknown operation type", op_type=op_type, txid=tx_info.get("txid"))
+                return (
+                    ProcessingResult(
+                        operation_found=True, is_valid=False, error_message=f"Unknown operation: {op_type}"
+                    ),
+                    [],
+                    [],
+                )
         except Exception as e:
             self.logger.error(
                 "Unhandled exception in BRC20Processor",
@@ -174,7 +222,7 @@ class BRC20Processor:
             result.is_valid = False
             result.error_code = "UNHANDLED_EXCEPTION"
             result.error_message = str(e)
-        return result
+            return result, [], []
 
     def process_deploy(
         self,
@@ -220,7 +268,7 @@ class BRC20Processor:
                 intermediate_total_minted[ticker] = add_amounts(current_minted, amount)
 
             if recipient:
-                self.update_balance(
+                mint_success = self.update_balance(
                     address=recipient,
                     ticker=ticker,
                     amount_delta=amount,
@@ -228,6 +276,20 @@ class BRC20Processor:
                     txid=tx_info["txid"],
                     intermediate_balances=intermediate_balances,
                 )
+
+                if not mint_success:
+                    self.logger.error(
+                        f"Failed to credit recipient balance for mint",
+                        recipient=recipient,
+                        ticker=ticker,
+                        amount=amount,
+                        txid=tx_info["txid"],
+                    )
+                    return ValidationResult(
+                        False,
+                        BRC20ErrorCodes.INSUFFICIENT_BALANCE,
+                        f"Failed to process mint operation",
+                    )
         return validation_result
 
     def process_transfer(
@@ -255,7 +317,7 @@ class BRC20Processor:
             sender_address = self.get_first_input_address(tx_info)
             recipient_address = self.validator.get_output_after_op_return_address(tx_info.get("vout", []))
             if sender_address and recipient_address:
-                self.update_balance(
+                sender_success = self.update_balance(
                     address=sender_address,
                     ticker=operation["tick"],
                     amount_delta=f"-{operation['amt']}",
@@ -263,14 +325,36 @@ class BRC20Processor:
                     txid=tx_info["txid"],
                     intermediate_balances=intermediate_balances,
                 )
-                self.update_balance(
-                    address=recipient_address,
-                    ticker=operation["tick"],
-                    amount_delta=operation["amt"],
-                    op_type="transfer_in",
-                    txid=tx_info["txid"],
-                    intermediate_balances=intermediate_balances,
-                )
+
+                if sender_success:
+                    recipient_success = self.update_balance(
+                        address=recipient_address,
+                        ticker=operation["tick"],
+                        amount_delta=operation["amt"],
+                        op_type="transfer_in",
+                        txid=tx_info["txid"],
+                        intermediate_balances=intermediate_balances,
+                    )
+
+                    if not recipient_success:
+                        self.logger.error(
+                            f"Failed to credit recipient balance for transfer",
+                            recipient=recipient_address,
+                            ticker=operation["tick"],
+                            amount=operation["amt"],
+                            txid=tx_info["txid"],
+                        )
+                        return ValidationResult(
+                            False,
+                            BRC20ErrorCodes.INSUFFICIENT_BALANCE,
+                            f"Failed to process transfer: insufficient balance for sender",
+                        )
+                else:
+                    return ValidationResult(
+                        False,
+                        BRC20ErrorCodes.INSUFFICIENT_BALANCE,
+                        f"Insufficient balance for transfer: {sender_address}",
+                    )
             else:
                 return ValidationResult(
                     False,
@@ -331,31 +415,40 @@ class BRC20Processor:
         op_type,
         txid,
         intermediate_balances: Optional[Dict] = None,
-    ):
+    ) -> bool:
+        """Update balance and return True if successful, False if insufficient balance."""
         normalized_ticker = ticker.upper()
         start_balance = self.validator.get_balance(address, normalized_ticker, intermediate_balances)
         from src.utils.amounts import add_amounts, subtract_amounts, compare_amounts
 
-        if amount_delta.startswith("-"):
-            amount_to_subtract = amount_delta[1:]
+        amount_delta_str = str(amount_delta)
+
+        if amount_delta_str.startswith("-"):
+            amount_to_subtract = amount_delta_str[1:]
             if compare_amounts(start_balance, amount_to_subtract) < 0:
-                raise BRC20Exception(
-                    BRC20ErrorCodes.INSUFFICIENT_BALANCE,
-                    f"Insufficient balance for {op_type} for address {address}",
+                self.logger.warning(
+                    f"Insufficient balance for {op_type} for address {address}: {start_balance} < {amount_to_subtract}",
+                    address=address,
+                    ticker=normalized_ticker,
+                    current_balance=start_balance,
+                    required_amount=amount_to_subtract,
+                    op_type=op_type,
+                    txid=txid,
                 )
+                return False
             new_balance = subtract_amounts(start_balance, amount_to_subtract)
         else:
             new_balance = add_amounts(start_balance, amount_delta)
+
         self._pending_balance_updates[(address, normalized_ticker)] = new_balance
 
         if intermediate_balances is not None:
             intermediate_balances[(address, normalized_ticker)] = new_balance
 
+        return True
+
     def flush_pending_balances(self) -> None:
-        """
-        Apply all pending balance updates to the database.
-        This method must be called at the end of block processing.
-        """
+        """Apply all pending balance updates to the database."""
         if not self._pending_balance_updates:
             return
 
@@ -367,8 +460,6 @@ class BRC20Processor:
                 db_balance_obj = Balance.get_or_create(self.db, address, ticker)
                 db_balance_obj.balance = new_balance
 
-            self.db.commit()
-
             self._pending_balance_updates.clear()
 
             self.logger.debug("Flushed pending balance updates", updates_count=updates_count, addresses=addresses)
@@ -377,14 +468,10 @@ class BRC20Processor:
             self.logger.error(
                 "Failed to flush pending balance updates", error=str(e), pending_updates_count=updates_count
             )
-            self.db.rollback()
             raise
 
     def clear_pending_balances(self) -> None:
-        """
-        Clear all pending balance updates without applying them.
-        This method should be called when block processing fails and rollback is needed.
-        """
+        """Clear all pending balance updates without applying them."""
         if self._pending_balance_updates:
             self.logger.debug(
                 "Clearing pending balance updates due to rollback", updates_count=len(self._pending_balance_updates)
@@ -663,3 +750,15 @@ class BRC20Processor:
             result.ticker = _op_data.get("tick")
             result.amount = _op_data.get("amt")
         return result
+
+    def _get_current_balance(self, address: str, ticker: str, intermediate_state: IntermediateState) -> Decimal:
+        key = (address, ticker.upper())
+        if key in intermediate_state.balances:
+            return intermediate_state.balances[key]
+        return self.validator.get_balance(address, ticker)
+
+    def _get_current_total_minted(self, ticker: str, intermediate_state: IntermediateState) -> Decimal:
+        normalized_ticker = ticker.upper()
+        if normalized_ticker in intermediate_state.total_minted:
+            return intermediate_state.total_minted[normalized_ticker]
+        return self.validator.get_total_minted(ticker)
