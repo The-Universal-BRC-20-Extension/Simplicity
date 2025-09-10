@@ -209,14 +209,14 @@ class BRC20Validator:
 
         return None
 
-    def get_current_supply(self, ticker: str) -> str:
+    def get_current_supply(self, ticker: str) -> Decimal:
         total = (
-            self.db.query(func.coalesce(func.sum(cast(Balance.balance, BigInteger)), 0))
+            self.db.query(func.coalesce(func.sum(Balance.balance), 0))
             .filter(Balance.ticker.ilike(ticker))
             .scalar()
         )
 
-        return str(total or 0)
+        return Decimal(total or 0)
 
     def get_total_minted(self, ticker: str, intermediate_total_minted: Optional[Dict] = None) -> Decimal:
         from src.models.transaction import BRC20Operation

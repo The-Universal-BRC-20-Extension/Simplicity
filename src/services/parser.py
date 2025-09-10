@@ -537,14 +537,15 @@ class BRC20Parser:
     def validate_multi_transfer_structure(
         self, tx: Dict[str, Any], transfer_ops: List[Tuple[str, int]]
     ) -> ValidationResult:
-        """Validates the strict (OP_RETURN, Recipient) pair structure"""
-        if len(transfer_ops) > 50:
-            return ValidationResult(
-                False,
-                BRC20ErrorCodes.MULTI_TRANSFER_LIMIT_EXCEEDED,
-                f"Exceeded transfer limit: {len(transfer_ops)} > 50",
-            )
-
+        """
+        Validates the strict (OP_RETURN, Recipient) pair structure of multi-transfers.
+        
+        Each transfer operation must follow the pattern:
+        - OP_RETURN output at even index position (0, 2, 4...)
+        - Recipient output at the next position (odd index: 1, 3, 5...)
+        
+        No limit is imposed on the number of transfers in a single transaction.
+        """
         vouts = tx.get("vout", [])
         for i, (hex_data, op_return_index) in enumerate(transfer_ops):
             expected_op_return_index = 2 * i

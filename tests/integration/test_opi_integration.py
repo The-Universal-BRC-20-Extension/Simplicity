@@ -5,6 +5,7 @@ from src.opi.registry import OPIRegistry
 from src.opi.operations.test_opi.processor import TestOPIProcessor
 from src.services.processor import BRC20Processor
 from src.services.indexer import IndexerService
+from src.services.validator import ValidationResult
 
 
 class TestOPIIntegration:
@@ -42,6 +43,7 @@ class TestOPIIntegration:
         deploy_record = Mock()
         self.processor.validator.get_deploy_record.return_value = deploy_record
         self.processor.validator.get_balance.return_value = Decimal("200")
+        self.processor.validator.validate_complete_operation.return_value = ValidationResult(True)
 
         # Mock parser
         self.processor.parser.parse_brc20_operation.return_value = {
@@ -114,6 +116,9 @@ class TestOPIIntegration:
             "data": {"op": "invalid_opi", "tick": "TEST", "amt": "100"},
         }
         self.processor.parser.extract_op_return_data.return_value = ("test_hex", 0)
+        
+        # Mock validator to return invalid result
+        self.processor.validator.validate_complete_operation.return_value = ValidationResult(False, "UNKNOWN_OPERATION", "Unknown operation")
 
         # Mock transaction
         tx = {"txid": "test_tx", "vout": [], "vin": []}
