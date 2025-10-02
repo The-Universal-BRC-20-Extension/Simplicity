@@ -4,7 +4,7 @@ BRC-20 consensus rule validation service
 
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, BigInteger
+from sqlalchemy import func
 from decimal import Decimal
 from src.utils.exceptions import BRC20ErrorCodes, ValidationResult
 from src.utils.amounts import (
@@ -209,14 +209,10 @@ class BRC20Validator:
 
         return None
 
-    def get_current_supply(self, ticker: str) -> str:
-        total = (
-            self.db.query(func.coalesce(func.sum(cast(Balance.balance, BigInteger)), 0))
-            .filter(Balance.ticker.ilike(ticker))
-            .scalar()
-        )
+    def get_current_supply(self, ticker: str) -> Decimal:
+        total = self.db.query(func.coalesce(func.sum(Balance.balance), 0)).filter(Balance.ticker.ilike(ticker)).scalar()
 
-        return str(total or 0)
+        return Decimal(total or 0)
 
     def get_total_minted(self, ticker: str, intermediate_total_minted: Optional[Dict] = None) -> Decimal:
         from src.models.transaction import BRC20Operation

@@ -226,7 +226,7 @@ class TestBRC20Validator:
 
         supply = self.validator.get_current_supply("OPQT")
 
-        assert supply == "1000000"
+        assert supply == Decimal("1000000")
 
     def test_get_balance(self):
         mock_balance = Mock()
@@ -310,6 +310,7 @@ class TestBRC20Validator:
         mock_deploy = Mock()
         mock_deploy.max_supply = "21000000"
         mock_deploy.limit_per_op = "1000"
+
         self.mock_db_session.query.return_value.filter.return_value.scalar.return_value = 21000000  # noqa: E501
 
         operation = {"tick": "OPQT", "amt": "1"}

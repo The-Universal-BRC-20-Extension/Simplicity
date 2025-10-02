@@ -11,9 +11,10 @@ from src.utils.bitcoin import is_op_return_script, extract_op_return_data
 class BRC20Parser:
     """Parse and validate BRC-20 OP_RETURN payloads"""
 
-    def __init__(self):
+    def __init__(self, opi_registry=None):
         """Initialize parser"""
         self.max_op_return_size = 80  # Bitcoin OP_RETURN size limit
+        self.opi_registry = opi_registry
 
     def extract_op_return_data(self, tx: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
         """
@@ -228,6 +229,15 @@ class BRC20Parser:
                     "error_code": BRC20ErrorCodes.MISSING_OPERATION,
                     "error_message": "Missing operation field 'op'",
                 }
+            
+            if self.opi_registry and self.opi_registry.has_processor(op):
+                return {
+                    "success": True,
+                    "data": operation,
+                    "error_code": None,
+                    "error_message": None,
+                }
+            
             valid_operations = ["deploy", "mint", "transfer"]
             if op not in valid_operations:
                 return {
@@ -537,14 +547,15 @@ class BRC20Parser:
     def validate_multi_transfer_structure(
         self, tx: Dict[str, Any], transfer_ops: List[Tuple[str, int]]
     ) -> ValidationResult:
-        """Validates the strict (OP_RETURN, Recipient) pair structure"""
-        if len(transfer_ops) > 50:
-            return ValidationResult(
-                False,
-                BRC20ErrorCodes.MULTI_TRANSFER_LIMIT_EXCEEDED,
-                f"Exceeded transfer limit: {len(transfer_ops)} > 50",
-            )
+        """
+        Validates the strict (OP_RETURN, Recipient) pair structure of multi-transfers.
 
+        Each transfer operation must follow the pattern:
+        - OP_RETURN output at even index position (0, 2, 4...)
+        - Recipient output at the next position (odd index: 1, 3, 5...)
+
+        No limit is imposed on the number of transfers in a single transaction.
+        """
         vouts = tx.get("vout", [])
         for i, (hex_data, op_return_index) in enumerate(transfer_ops):
             expected_op_return_index = 2 * i

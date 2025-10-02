@@ -1,16 +1,10 @@
-"""
-Main Bitcoin indexer service for Universal BRC-20 Extension.
-
-This service orchestrates the complete Bitcoin synchronization process,
-including sequential block processing, reorg handling, and state management.
-"""
+"""Main Bitcoin indexer service for Universal BRC-20 Extension."""
 
 import time
 import structlog
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from sqlalchemy.exc import IntegrityError
@@ -22,10 +16,13 @@ from .processor import BRC20Processor
 from .reorg_handler import ReorgHandler
 from .error_handler import ErrorHandler
 from src.utils.exceptions import IndexerError, TransferType
+from src.opi.contracts import IntermediateState
+from src.opi.registry import OPIRegistry
 
 
 @dataclass
 class BlockProcessingResult:
+
     height: int
     block_hash: str
     tx_count: int
@@ -37,6 +34,7 @@ class BlockProcessingResult:
 
 @dataclass
 class SyncStatus:
+
     last_processed_height: int
     blockchain_height: int
     blocks_behind: int
@@ -46,9 +44,7 @@ class SyncStatus:
 
 
 class IndexerService:
-    """
-    Main blockchain indexation orchestrator.
-    """
+    """Main Bitcoin indexation orchestrator."""
 
     def __init__(
         self,
@@ -69,6 +65,34 @@ class IndexerService:
         self._blocks_processed = 0
         self.initial_populate_data = initial_populate_data
 
+        if settings.ENABLE_OPI:
+            self.opi_registry = OPIRegistry()
+            self._register_opi_processors()
+            self.processor.set_opi_registry(self.opi_registry)
+
+    def _register_opi_processors(self):
+        """Register OPI processors dynamically"""
+        import importlib
+
+        for op_name, class_path in settings.ENABLED_OPIS.items():
+            try:
+                module_path, class_name = class_path.rsplit(".", 1)
+                module = importlib.import_module(module_path)
+                processor_class = getattr(module, class_name)
+
+                from src.opi.base_opi import BaseProcessor
+
+                if not issubclass(processor_class, BaseProcessor):
+                    raise ValueError(f"Class {class_name} must inherit from BaseProcessor")
+
+                self.opi_registry.register(op_name, processor_class)
+                self.logger.info("Successfully registered OPI processor", op_name=op_name)
+
+            except Exception as e:
+                self.logger.error(f"Failed to register OPI processor {op_name}", error=str(e), class_path=class_path)
+                if settings.STOP_ON_OPI_ERROR:
+                    raise
+
     def start_indexing(self, start_height: Optional[int] = None, max_blocks: Optional[int] = None) -> None:
         """Start indexation from specified height."""
         try:
@@ -83,7 +107,7 @@ class IndexerService:
 
             blockchain_height = self.rpc.get_block_count()
             self.logger.info(
-                "Blockchain status",
+                "Bitcoin status",
                 current_height=blockchain_height,
                 blocks_to_process=blockchain_height - start_height + 1,
             )
@@ -665,10 +689,8 @@ class IndexerService:
             raise IndexerError(f"Failed to process block {block_height}: {e}")
 
     def process_block_transactions(self, block: Dict[str, Any]) -> List[Any]:
-        """Process all transactions in a block with FAST BRC-20 pre-filtering."""
-        intermediate_balances = {}
-        intermediate_total_minted = {}
-        intermediate_deploys = {}
+        intermediate_state = self._initialize_intermediate_state()
+        persistence_buffer = []
 
         transactions = block.get("tx", [])
         block_timestamp = block.get("time", 0)
@@ -719,16 +741,21 @@ class IndexerService:
 
         for tx_data in prioritized_list:
             try:
-                result = self.processor.process_transaction(
+                result, objects_to_persist, state_commands = self.processor.process_transaction(
                     tx_data,
                     block_height=block["height"],
                     tx_index=tx_data["original_tx_index"],
                     block_timestamp=block_timestamp,
                     block_hash=block["hash"],
-                    intermediate_balances=intermediate_balances,
-                    intermediate_total_minted=intermediate_total_minted,
-                    intermediate_deploys=intermediate_deploys,
+                    intermediate_state=intermediate_state,
                 )
+
+                if objects_to_persist:
+                    persistence_buffer.extend(objects_to_persist)
+
+                if state_commands:
+                    self._apply_state_commands(state_commands, intermediate_state)
+
                 result.original_tx_index = tx_data["original_tx_index"]
                 processed_results.append(result)
             except Exception as e:
@@ -748,7 +775,11 @@ class IndexerService:
                 processed_results.append(error_result)
 
         try:
-            self.processor.flush_pending_balances()
+            self.processor.flush_pending_balances(intermediate_state)
+
+            for obj in persistence_buffer:
+                self.db.add(obj)
+
             self.logger.debug(
                 "Flushed pending balance updates for block",
                 height=block["height"],
@@ -878,6 +909,7 @@ class IndexerService:
             )
 
     def get_last_processed_height(self) -> int:
+
         try:
             last_block = self.db.query(ProcessedBlock).order_by(desc(ProcessedBlock.height)).first()
             return last_block.height if last_block else settings.START_BLOCK_HEIGHT - 1
@@ -886,6 +918,7 @@ class IndexerService:
             return settings.START_BLOCK_HEIGHT - 1
 
     def is_block_processed(self, height: int, block_hash: str) -> bool:
+
         try:
             processed_block = self.db.query(ProcessedBlock).filter_by(height=height).first()
             return processed_block is not None and processed_block.block_hash == block_hash
@@ -967,7 +1000,6 @@ class IndexerService:
         return candidates
 
     def _is_brc20_candidate_ultra_fast(self, hex_script: str) -> bool:
-        """FAST BRC-20 candidate detection using minimal processing"""
         try:
             if len(hex_script) < 20:
                 return False

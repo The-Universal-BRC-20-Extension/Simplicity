@@ -24,6 +24,7 @@ MANIFEST
 
 # Environments
 .env
+.env.back
 .venv
 env/
 venv/
@@ -62,7 +63,10 @@ coverage.xml
 temp_docs/
 backups/
 dev/
+.rules/
+.cursor/
 
 # Alembic
 # Ne pas ignorer les fichiers de migration
 !alembic/versions/
+.env.back

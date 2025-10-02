@@ -13,7 +13,6 @@ from src.services.validator import ValidationResult
 
 
 class TestTimestampFix:
-    """Comprehensive test suite for Bitcoin timestamp fix"""
 
     @pytest.fixture
     def mock_db_session(self):
@@ -32,7 +31,6 @@ class TestTimestampFix:
         return IndexerService(mock_db_session, mock_bitcoin_rpc)
 
     def test_convert_block_timestamp_success(self, processor):
-        """Test successful timestamp conversion"""
         block_timestamp = 1232346882
         expected_datetime = datetime.fromtimestamp(1232346882, tz=timezone.utc)
 
@@ -45,7 +43,6 @@ class TestTimestampFix:
         assert result.day == 19
 
     def test_convert_block_timestamp_invalid_type(self, processor):
-        """Test timestamp conversion with invalid type"""
         invalid_timestamps = ["invalid", None, 1232346882.5, []]
 
         for invalid_ts in invalid_timestamps:
@@ -53,7 +50,6 @@ class TestTimestampFix:
                 processor._convert_block_timestamp(invalid_ts)
 
     def test_convert_block_timestamp_negative(self, processor):
-        """Test timestamp conversion with negative value"""
         with pytest.raises(ValueError, match="Invalid block timestamp"):
             processor._convert_block_timestamp(-1)
 
@@ -61,7 +57,6 @@ class TestTimestampFix:
             processor._convert_block_timestamp(0)
 
     def test_process_transaction_with_timestamp(self, processor, mock_db_session):
-        """Test process_transaction stores block timestamp"""
         block_timestamp = 1232346882
 
         tx_data = {
@@ -78,13 +73,11 @@ class TestTimestampFix:
                 "parse_brc20_operation",
                 return_value={"success": True, "data": {"op": "deploy"}},
             ):
-                # Process transaction and verify timestamp is set correctly
                 processor.process_transaction(tx_data, 1000, 1, block_timestamp, "test_block_hash")
 
                 assert processor.current_block_timestamp == block_timestamp
 
     def test_process_deploy_with_bitcoin_timestamp(self, processor, mock_db_session):
-        """Test deploy processing uses Bitcoin timestamp"""
         processor.current_block_timestamp = 1232346882
 
         operation = {"op": "deploy", "tick": "TEST", "m": "1000000", "l": "1000"}
@@ -116,7 +109,6 @@ class TestTimestampFix:
             assert deploy_obj.deploy_timestamp == expected_timestamp
 
     def test_log_operation_with_bitcoin_timestamp(self, processor, mock_db_session):
-        """Test operation logging uses Bitcoin timestamp"""
         from src.services.validator import ValidationResult
 
         processor.current_block_timestamp = 1232346882
@@ -147,7 +139,6 @@ class TestTimestampFix:
                 assert operation_obj.timestamp == expected_timestamp
 
     def test_indexer_processes_block_with_timestamp(self, indexer, mock_db_session):
-        """Test indexer extracts and passes block timestamp"""
         block_data = {
             "height": 1000,
             "hash": "test_hash",
@@ -171,6 +162,10 @@ class TestTimestampFix:
         with patch.object(indexer.processor, "process_transaction") as mock_process:
             indexer.process_block_transactions(block_data)
 
+            from src.opi.contracts import IntermediateState
+
+            test_intermediate_state = IntermediateState()
+
             mock_process.assert_called_once_with(
                 {
                     "txid": "test_tx",
@@ -188,22 +183,16 @@ class TestTimestampFix:
                 tx_index=1,
                 block_timestamp=1232346882,
                 block_hash="test_hash",
-                intermediate_balances={},
-                intermediate_total_minted={},
-                intermediate_deploys={},
+                intermediate_state=test_intermediate_state,
             )
 
     def test_indexer_handles_missing_timestamp(self, indexer):
-        """Test indexer handles missing block timestamp"""
         block_data = {"height": 1000, "hash": "test_hash", "tx": [{"txid": "test_tx"}]}
 
-        # The indexer doesn't validate missing timestamps, it just processes without timestamp
         result = indexer.process_block_transactions(block_data)
-        # Should complete without error
-        assert result == []  # process_block_transactions returns empty list when no transactions processed
+        assert result == []
 
     def test_timestamp_conversion_performance(self, processor):
-        """Test timestamp conversion performance"""
         import time
 
         start_time = time.time()
@@ -214,7 +203,6 @@ class TestTimestampFix:
         assert elapsed < 0.1
 
     def test_known_bitcoin_blocks_timestamps(self, processor):
-        """Test with known Bitcoin block timestamps"""
         known_blocks = [
             {"height": 1000, "timestamp": 1232346882, "date": "2009-01-19"},
             {"height": 100000, "timestamp": 1293623863, "date": "2010-12-29"},
@@ -230,7 +218,6 @@ class TestTimestampFix:
             assert result.tzinfo == timezone.utc
 
     def test_enterprise_logging_on_errors(self, processor, caplog):
-        """Test enterprise-grade logging on timestamp errors"""
         import logging
 
         caplog.set_level(logging.ERROR)
@@ -238,7 +225,6 @@ class TestTimestampFix:
         with pytest.raises(ValueError):
             processor._convert_block_timestamp(-1)
 
-        # Test that process_deploy raises ValueError for invalid timestamp
         processor.current_block_timestamp = -1
 
         operation = {"op": "deploy", "tick": "TEST", "m": "1000000"}
@@ -249,20 +235,15 @@ class TestTimestampFix:
                 processor.process_deploy(operation, tx_info, intermediate_deploys={})
 
     def test_process_transaction_invalid_timestamp(self, processor):
-        """Test process_transaction with invalid block timestamp"""
         tx_data = {"txid": "test_txid", "vout": []}
 
-        # The process_transaction method doesn't validate timestamps
-        # It just uses them as-is, so invalid timestamps will cause errors later
         invalid_timestamps = [-1, 0, "invalid", None]
 
         for invalid_ts in invalid_timestamps:
-            result = processor.process_transaction(tx_data, 1000, 1, invalid_ts, "test_block_hash")
-            # Should complete without error since no OP_RETURN data
+            result, _, _ = processor.process_transaction(tx_data, 1000, 1, invalid_ts, "test_block_hash")
             assert result.error_message is None
 
     def test_log_operation_timestamp_fallback(self, processor, mock_db_session):
-        """Test log_operation fallback when timestamp conversion fails"""
         from src.services.validator import ValidationResult
 
         processor.current_block_timestamp = -1
@@ -283,6 +264,5 @@ class TestTimestampFix:
                 "get_output_after_op_return_address",
                 return_value="test_recipient",
             ):
-                # Should raise ValueError for invalid timestamp
                 with pytest.raises(ValueError, match="Invalid block timestamp"):
                     processor.log_operation(operation_data, validation_result, tx_info, "raw_op_return")
