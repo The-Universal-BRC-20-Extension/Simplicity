@@ -70,3 +70,13 @@ dev/
 # Ne pas ignorer les fichiers de migration
 !alembic/versions/
 .env.back
+
+# Private development documentation (not for public)
+FLOODFISH_OPI_GUIDE.md
+OPI_REGISTRY_ARCHITECTURE.md
+QUICK_START_OPI.md
+ARCHITECTURE_BRC20_OPI_GUIDE.md
+QUICK_OPI_GUIDE.md
+BRANCHE_COMPARISON.md
+INSTALLATION_COMPLETE_FEAT_OPI_REGISTRY.md
+SETUP_COMPLETE.md

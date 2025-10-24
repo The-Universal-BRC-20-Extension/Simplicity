@@ -795,6 +795,28 @@ class IndexerService:
             )
             self.processor.clear_pending_balances()
             raise IndexerError(f"Balance flush failed at block {block['height']}: {e}")
+        
+        # ═══════════════════════════════════════════════════════════
+        # HOOK : on_block_end (pour OPIs avec traitement post-bloc)
+        # ═══════════════════════════════════════════════════════════
+        # Déclencher les hooks OPI après traitement de toutes les transactions
+        # mais avant le retour et le commit final
+        try:
+            if hasattr(self, 'opi_registry') and self.opi_registry:
+                self._trigger_opi_block_end_hooks(
+                    block_height=block.get("height"),
+                    block_hash=block.get("hash"),
+                    block_data=block,
+                    intermediate_state=intermediate_state
+                )
+        except Exception as e:
+            self.logger.error(
+                "Error in OPI block end hooks",
+                block_height=block.get("height"),
+                error=str(e)
+            )
+            # Ne pas lever l'exception pour ne pas bloquer l'indexation
+            # Les hooks sont optionnels
 
         all_results = []
         processed_indices = {r.original_tx_index for r in processed_results}
@@ -951,6 +973,14 @@ class IndexerService:
         else:
             return settings.START_BLOCK_HEIGHT
 
+    def _initialize_intermediate_state(self) -> IntermediateState:
+        """Initialize intermediate state for block processing"""
+        return IntermediateState(
+            balances={},
+            total_minted={},
+            deploys={}
+        )
+
     def _should_check_reorg(self, height: int) -> bool:
         return height > settings.START_BLOCK_HEIGHT
 
@@ -1010,3 +1040,67 @@ class IndexerService:
 
         except Exception:
             return False
+    
+    def _trigger_opi_block_end_hooks(
+        self,
+        block_height: int,
+        block_hash: str,
+        block_data: Dict[str, Any],
+        intermediate_state: IntermediateState
+    ) -> None:
+        """
+        Déclenche les hooks 'on_block_end' pour les OPIs qui les implémentent.
+        
+        Cette méthode est appelée APRÈS le traitement de toutes les transactions
+        d'un bloc, mais AVANT le commit en base de données.
+        
+        Elle permet aux OPIs d'effectuer des traitements post-bloc comme :
+        - Calcul de récompenses distribuées entre participants
+        - Agrégation de statistiques
+        - Mise à jour de balances basées sur le bloc complet
+        
+        Args:
+            block_height: Hauteur du bloc
+            block_hash: Hash du bloc
+            block_data: Données complètes du bloc (incluant transactions et coinbase)
+            intermediate_state: État intermédiaire avec les modifications du bloc
+        """
+        if not self.opi_registry:
+            return
+        
+        # Récupérer la liste de tous les OPIs enregistrés
+        registered_opis = self.opi_registry.list_processors()
+        
+        for op_name in registered_opis:
+            try:
+                # Créer un contexte pour le processeur
+                from src.opi.contracts import Context
+                context = Context(intermediate_state, self.processor.validator)
+                
+                # Obtenir l'instance du processeur
+                processor = self.opi_registry.get_processor(op_name, context)
+                
+                # Vérifier si le processeur implémente on_block_end
+                if hasattr(processor, 'on_block_end') and callable(getattr(processor, 'on_block_end')):
+                    self.logger.debug(
+                        "Triggering OPI block end hook",
+                        op_name=op_name,
+                        block_height=block_height
+                    )
+                    
+                    processor.on_block_end(
+                        block_height=block_height,
+                        block_hash=block_hash,
+                        block_data=block_data,
+                        intermediate_state=intermediate_state,
+                        db_session=self.db
+                    )
+                    
+            except Exception as e:
+                self.logger.error(
+                    "Error in OPI block end hook",
+                    op_name=op_name,
+                    block_height=block_height,
+                    error=str(e)
+                )
+                # Continue avec les autres OPIs même si un échoue

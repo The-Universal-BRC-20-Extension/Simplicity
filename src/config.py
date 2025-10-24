@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # Enabled OPIs: operation name -> processor class import path
     ENABLED_OPIS: ClassVar[Dict[str, str]] = {
         "test_opi": "src.opi.operations.test_opi.processor.TestOPIProcessor",
+        "poisson": "src.opi.operations.poisson_opi.processor.PoissonOPIProcessor",
     }
 
     class Config:
