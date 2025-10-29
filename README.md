@@ -1,7 +1,7 @@
 # **Simplicity: An Universal BRC-20 Indexer & OPI Framework**
 
 [![CI/CD Pipeline](https://github.com/The-Universal-BRC-20-Extension/simplicity/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Universal-BRC-20-Extension/simplicity/actions/workflows/ci.yml)
-[![Test Coverage](https://img.shields.io/badge/coverage-67%25-brightgreen)](https://github.com/The-Universal-BRC20-Extension/simplicity)
+[![Test Coverage](https://img.shields.io/badge/coverage-68%25-brightgreen)](https://github.com/The-Universal-BRC20-Extension/simplicity)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
@@ -16,7 +16,7 @@ This indexer is the consensus engine that powers the entire ecosystem, transform
 ## Key Features
 
 - **High Performance:** Sub-20ms API response times for cached queries, optimized for real-time applications.
-- **Extensively Tested:** +80% test coverage with a comprehensive suite of unit, integration, and protocol-level tests.
+- **Extensively Tested:** 68% test coverage with 442 comprehensive tests across unit, integration, and functional test suites.
 - **Protocol-Complete:** Full implementation of the Universal BRC-20 standard and a growing list of OPIs.
 - **Modular OPI Framework:** A pluggable architecture that allows for the seamless addition of new operations like **OPI-1 (`swap`)** without disrupting core functionality.
 - **Dockerized:** One-command deployment with Docker Compose for ease of setup.
@@ -47,10 +47,30 @@ This plug-and-play architecture allows the community to propose and integrate ne
 
 - `deploy`, `mint`, `transfer`: The foundational operations for creating and moving BRC-20 tokens, handled by the legacy processor.
 
-### **OPI-0: `no_return`** [Next Update]
+### **OPI Framework: Extensible Protocol Architecture**
 
-- **Purpose:** A specialized operation for scenarios requiring proof of token burn or specific on-chain interactions, involving Ordinals and witness data inscriptions.
-- **Processor Logic:** The OPI-0 processor validates a unique transaction structure, including checks on witness data and specific output addresses (e.g., transfers to a Satoshi address). It interacts with external services OPI-LC indexer for the validation.
+The OPI (Operation Proposal Improvement) framework allows for seamless integration of new protocols without modifying the core indexer. Each OPI is a self-contained module with its own validation logic and state management.
+
+#### **Current OPIs:**
+
+- **OPI-0: `no_return`** [In Development]
+  - **Purpose:** Specialized operation for token burn scenarios and witness data validation
+  - **Features:** Ordinals integration, witness data processing, external service validation
+  - **Status:** Architecture complete, implementation in progress
+
+#### **How to Add New OPIs:**
+
+1. **Create OPI Module:** Implement `BaseProcessor` interface
+2. **Register OPI:** Add to `ENABLED_OPIS` configuration
+3. **Define Operations:** Specify supported operation types
+4. **Test Integration:** Use comprehensive test suite
+5. **Deploy:** Zero-downtime deployment via configuration
+
+For detailed OPI development guide, see [OPI Developer Documentation](docs/architecture/OPI_DEVELOPER_GUIDE.md).
+
+For OPI architecture diagrams and visual guides, see [OPI Architecture Diagrams](docs/architecture/OPI_ARCHITECTURE_DIAGRAM.md).
+
+For maintainer-specific guidance, see [OPI Maintenance Guide](docs/architecture/OPI_MAINTENANCE_GUIDE.md).
 
 ---
 
@@ -152,6 +172,7 @@ tests/
 │   ├── services/                  # Service layer tests
 │   ├── models/                    # Model tests  
 │   ├── utils/                     # Utility function tests
+│   ├── opi/                       # OPI framework tests
 │   └── api/                       # API unit tests
 ├── integration/                    # Integration tests (108 tests) - Database & API
 ├── functional/                     # Functional tests (34 tests) - End-to-end
@@ -213,8 +234,8 @@ pipenv run pytest tests/ -m bitcoin     # Bitcoin-related tests
 ### Test Coverage
 
 The test suite provides comprehensive coverage:
-- **379 total tests** across all categories
-- **67% code coverage** with detailed reporting
+- **442 total tests** across all categories
+- **68% code coverage** with detailed reporting
 - **Zero breaking changes** - all existing tests preserved
 
 ### Development Workflow
