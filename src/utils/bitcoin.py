@@ -13,12 +13,7 @@ def get_script_type(script_hex: str) -> str:
         return "op_return"
 
     # P2PKH (25 bytes: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG)
-    if (
-        len(script_bytes) == 25
-        and script_bytes[0] == 0x76
-        and script_bytes[1] == 0xA9
-        and script_bytes[2] == 0x14
-    ):
+    if len(script_bytes) == 25 and script_bytes[0] == 0x76 and script_bytes[1] == 0xA9 and script_bytes[2] == 0x14:
         return "p2pkh"
 
     # P2SH (23 bytes: OP_HASH160 <20 bytes> OP_EQUAL)
@@ -40,9 +35,7 @@ def get_script_type(script_hex: str) -> str:
     return "unknown"
 
 
-def extract_address_from_script(
-    script_hex: str, network: str = "mainnet"
-) -> str | None:
+def extract_address_from_script(script_hex: str, network: str = "mainnet") -> str | None:
     """
     Extract address from output script
 
@@ -74,30 +67,21 @@ def extract_address_from_script(
         elif script_type == "p2wpkh":
             # Extract 20-byte hash from P2WPKH script
             hash160 = script_bytes[2:22]
-            # Convert to bech32 (simplified - would need bech32 library for
-            # full implementation)
+            # Convert to bech32 (simplified - would need bech32 library for full implementation)
             # For now, return hex representation
-            return (
-                f"bc1{hash160.hex()}" if network == "mainnet" else f"tb1{hash160.hex()}"
-            )
+            return f"bc1{hash160.hex()}" if network == "mainnet" else f"tb1{hash160.hex()}"
 
         elif script_type == "p2wsh":
             # Extract 32-byte hash from P2WSH script
             hash256 = script_bytes[2:34]
             # Convert to bech32 (simplified)
-            return (
-                f"bc1{hash256.hex()}" if network == "mainnet" else f"tb1{hash256.hex()}"
-            )
+            return f"bc1{hash256.hex()}" if network == "mainnet" else f"tb1{hash256.hex()}"
 
         elif script_type == "p2tr":
             # Extract 32-byte taproot output from P2TR script
             taproot_output = script_bytes[2:34]
             # Convert to bech32m (simplified)
-            return (
-                f"bc1p{taproot_output.hex()}"
-                if network == "mainnet"
-                else f"tb1p{taproot_output.hex()}"
-            )
+            return f"bc1p{taproot_output.hex()}" if network == "mainnet" else f"tb1p{taproot_output.hex()}"
 
     except Exception:
         return None
@@ -166,11 +150,9 @@ def extract_op_return_data(script_hex: str) -> str | None:
     else:
         return None
 
-    # Check if we have enough bytes
     if pos + data_length > len(script_bytes):
         return None
 
-    # Extract data
     data = script_bytes[pos : pos + data_length]
     return data.hex()
 
@@ -189,10 +171,8 @@ def extract_sighash_type(signature_hex: str) -> int:
         return None
 
     try:
-        # Convert to bytes
         sig_bytes = bytes.fromhex(signature_hex)
 
-        # The sighashType is the last byte
         return sig_bytes[-1]
     except Exception:
         return None

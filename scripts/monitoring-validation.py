@@ -48,7 +48,6 @@ class MonitoringValidator:
                 data = response.json()
 
                 if endpoint == "/v1/indexer/brc20/health":
-                    # Accept both "ok" and "healthy" for maximum compatibility
                     status = data.get("status")
                     if status in ("ok", "healthy"):
                         print(f"✅ {endpoint}: healthy")
@@ -65,7 +64,6 @@ class MonitoringValidator:
                         }
 
                 elif endpoint == "/v1/indexer/brc20/status":
-                    # Expect: 3 integer fields
                     required_fields = [
                         "current_block_height_network",
                         "last_indexed_block_main_chain",
@@ -113,7 +111,6 @@ class MonitoringValidator:
         for endpoint in test_endpoints:
             response_times = []
 
-            # Test 10 requests
             for i in range(10):
                 try:
                     start_time = time.time()
@@ -228,7 +225,6 @@ class MonitoringValidator:
                     "error": str(e),
                 }
 
-        # Run concurrent requests
         start_time = time.time()
         tasks = [single_request() for _ in range(concurrent_requests)]
         results = await asyncio.gather(*tasks)
@@ -336,17 +332,14 @@ async def main():
     validator = MonitoringValidator(args.url)
 
     try:
-        # Run all validations
         all_passed = await validator.run_all_validations()
 
-        # Generate report if requested
         if args.report:
             report = await validator.generate_report()
             with open(args.report, "w") as f:
                 f.write(report)
             print(f"📄 Detailed report saved to {args.report}")
 
-        # Exit with appropriate code
         if args.exit_on_fail and not all_passed:
             sys.exit(1)
         elif all_passed:

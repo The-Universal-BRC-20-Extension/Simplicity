@@ -1,6 +1,5 @@
 import re
-from typing import Optional, Tuple
-
+from typing import Tuple, Optional
 from fastapi import HTTPException
 
 
@@ -19,9 +18,7 @@ class ValidationService:
             raise HTTPException(status_code=400, detail="Address is required")
 
         if not re.match(r"^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{3,62}$", address):
-            raise HTTPException(
-                status_code=400, detail="Invalid Bitcoin address format"
-            )
+            raise HTTPException(status_code=400, detail="Invalid Bitcoin address format")
         return address
 
     @staticmethod
@@ -35,13 +32,9 @@ class ValidationService:
     def validate_skip_limit(skip: int, limit: int) -> Tuple[int, int]:
         """Validate skip/limit parameters (non-negative skip, positive limit)"""
         if skip < 0:
-            raise HTTPException(
-                status_code=400, detail="Skip parameter must be non-negative"
-            )
+            raise HTTPException(status_code=400, detail="Skip parameter must be non-negative")
         if limit <= 0:
-            raise HTTPException(
-                status_code=400, detail="Limit parameter must be positive"
-            )
+            raise HTTPException(status_code=400, detail="Limit parameter must be positive")
         limit = min(1000, limit)
         return skip, limit
 
@@ -49,9 +42,7 @@ class ValidationService:
     def validate_height(height: int) -> int:
         """Validate height parameter (positive integer)"""
         if height <= 0:
-            raise HTTPException(
-                status_code=400, detail="Height parameter must be positive"
-            )
+            raise HTTPException(status_code=400, detail="Height parameter must be positive")
         return height
 
     @staticmethod
@@ -74,7 +65,6 @@ class ValidationService:
         if op_type.lower() not in valid_ops:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid operation type. Must be one of: "
-                f"{', '.join(valid_ops)}",
+                detail=f"Invalid operation type. Must be one of: {', '.join(valid_ops)}",
             )
         return op_type.lower()

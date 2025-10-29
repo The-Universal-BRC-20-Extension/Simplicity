@@ -6,20 +6,20 @@ for the blockchain indexing process.
 """
 
 import time
-from collections import deque
+import structlog
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from collections import deque
 
-import structlog
-from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from src.config import settings
-from src.models.balance import Balance
 from src.models.block import ProcessedBlock
-from src.models.deploy import Deploy
 from src.models.transaction import BRC20Operation
+from src.models.balance import Balance
+from src.models.deploy import Deploy
 
 
 @dataclass
@@ -127,9 +127,7 @@ class MonitoringService:
         except Exception as e:
             self.logger.error("Failed to record block metrics", error=str(e))
 
-    def record_operation_processed(
-        self, operation_type: str, is_valid: bool, processing_time: float = 0.0
-    ) -> None:
+    def record_operation_processed(self, operation_type: str, is_valid: bool, processing_time: float = 0.0) -> None:
         """
         Record operation processing metrics.
 
@@ -244,27 +242,16 @@ class MonitoringService:
 
             if self._consecutive_errors > 10:
                 is_healthy = False
-                errors.append(
-                    f"Too many consecutive errors: {self._consecutive_errors}"
-                )
+                errors.append(f"Too many consecutive errors: {self._consecutive_errors}")
             elif self._consecutive_errors > 5:
-                warnings.append(
-                    f"Multiple consecutive errors: {self._consecutive_errors}"
-                )
+                warnings.append(f"Multiple consecutive errors: {self._consecutive_errors}")
 
             if self._block_processing_times:
-                recent_avg = sum(list(self._block_processing_times)[-10:]) / min(
-                    10, len(self._block_processing_times)
-                )
-                overall_avg = sum(self._block_processing_times) / len(
-                    self._block_processing_times
-                )
+                recent_avg = sum(list(self._block_processing_times)[-10:]) / min(10, len(self._block_processing_times))
+                overall_avg = sum(self._block_processing_times) / len(self._block_processing_times)
 
                 if recent_avg > overall_avg * 2:
-                    warnings.append(
-                        f"Performance degradation detected: {recent_avg:.2f}s vs "
-                        f"{overall_avg:.2f}s avg"
-                    )
+                    warnings.append(f"Performance degradation detected: {recent_avg:.2f}s vs {overall_avg:.2f}s avg")
 
             sync_status = self._get_sync_status()
 
@@ -305,14 +292,10 @@ class MonitoringService:
             blocks_processed = len(self._block_processing_times)
             blocks_per_second = blocks_processed / uptime if uptime > 0 else 0.0
 
-            total_transactions = (
-                sum(self._transaction_counts) if self._transaction_counts else 0
-            )
+            total_transactions = sum(self._transaction_counts) if self._transaction_counts else 0
             transactions_per_second = total_transactions / uptime if uptime > 0 else 0.0
 
-            total_operations = (
-                sum(self._operation_counts) if self._operation_counts else 0
-            )
+            total_operations = sum(self._operation_counts) if self._operation_counts else 0
             operations_per_second = total_operations / uptime if uptime > 0 else 0.0
 
             avg_block_time = (
@@ -320,16 +303,10 @@ class MonitoringService:
                 if self._block_processing_times
                 else 0.0
             )
-            avg_query_time = (
-                (sum(self._query_times) / len(self._query_times))
-                if self._query_times
-                else 0.0
-            )
+            avg_query_time = (sum(self._query_times) / len(self._query_times)) if self._query_times else 0.0
 
             total_errors = sum(self._error_counts) if self._error_counts else 0
-            error_rate = (
-                (total_errors / blocks_processed) if blocks_processed > 0 else 0.0
-            )
+            error_rate = (total_errors / blocks_processed) if blocks_processed > 0 else 0.0
 
             memory_usage_mb = 0.0
 
@@ -374,17 +351,11 @@ class MonitoringService:
 
             total_blocks = self.db.query(ProcessedBlock).count()
             total_operations = self.db.query(BRC20Operation).count()
-            valid_operations = (
-                self.db.query(BRC20Operation).filter_by(is_valid=True).count()
-            )
+            valid_operations = self.db.query(BRC20Operation).filter_by(is_valid=True).count()
             total_balances = self.db.query(Balance).count()
             total_deploys = self.db.query(Deploy).count()
 
-            latest_block = (
-                self.db.query(ProcessedBlock)
-                .order_by(ProcessedBlock.height.desc())
-                .first()
-            )
+            latest_block = self.db.query(ProcessedBlock).order_by(ProcessedBlock.height.desc()).first()
 
             operation_counts = (
                 self.db.query(BRC20Operation.operation, func.count(BRC20Operation.id))
@@ -405,9 +376,7 @@ class MonitoringService:
                 "total_deploys": total_deploys,
                 "latest_block_height": latest_block.height if latest_block else 0,
                 "latest_block_hash": latest_block.block_hash if latest_block else None,
-                "latest_block_time": (
-                    latest_block.processed_at if latest_block else None
-                ),
+                "latest_block_time": (latest_block.processed_at if latest_block else None),
                 "operation_breakdown": dict(operation_counts),
                 "query_time": query_time,
             }
@@ -438,11 +407,7 @@ class MonitoringService:
                 "timestamp": datetime.utcnow().isoformat(),
                 "health": {
                     "is_healthy": health.is_healthy,
-                    "last_block_time": (
-                        health.last_block_time.isoformat()
-                        if health.last_block_time
-                        else None
-                    ),
+                    "last_block_time": (health.last_block_time.isoformat() if health.last_block_time else None),
                     "error_rate": health.error_rate,
                     "warning_count": len(health.warnings),
                     "error_count": len(health.errors),
@@ -474,11 +439,7 @@ class MonitoringService:
     def _get_sync_status(self) -> Optional[Dict[str, Any]]:
         """Get synchronization status from database"""
         try:
-            latest_block = (
-                self.db.query(ProcessedBlock)
-                .order_by(ProcessedBlock.height.desc())
-                .first()
-            )
+            latest_block = self.db.query(ProcessedBlock).order_by(ProcessedBlock.height.desc()).first()
 
             if not latest_block:
                 return None

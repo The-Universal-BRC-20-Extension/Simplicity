@@ -2,7 +2,6 @@ import os
 import sys
 from sqlalchemy import inspect
 
-# Add the project root to the Python path
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.database.connection import engine
@@ -18,11 +17,9 @@ def check_environment():
     """
     print("--- Starting Environment Check ---")
     try:
-        # 1. Check database connection
         connection = engine.connect()
         print("✅ Database connection successful.")
 
-        # 2. Check if all tables are created
         inspector = inspect(engine)
         tables = inspector.get_table_names()
 

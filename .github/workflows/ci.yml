@@ -92,7 +92,7 @@ jobs:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_brc20_indexer
         REDIS_URL: redis://localhost:6379/0
       run: |
-        pipenv run pytest tests/test_performance.py -v --tb=short
+        pipenv run pytest tests/integration/test_performance.py -v --tb=short
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -193,7 +193,7 @@ jobs:
           -e DATABASE_URL=$DATABASE_URL \
           -e REDIS_URL=$REDIS_URL \
           universal-brc20-indexer:test \
-          pipenv run pytest tests/test_integration.py -v
+          pipenv run pytest tests/integration/test_integration.py -v
     
     - name: Health check validation
       env:

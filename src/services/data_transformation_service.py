@@ -1,6 +1,5 @@
+from typing import Dict, List, Optional, Any
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
 import structlog
 
 logger = structlog.get_logger()
@@ -14,7 +13,6 @@ class DataTransformationService:
 
     @staticmethod
     def transform_ticker_info(backend_data: Dict) -> Dict:
-        """Transform backend ticker data to API format"""
         return {
             "ticker": backend_data.get("tick"),
             "decimals": backend_data.get("decimals"),
@@ -23,9 +21,7 @@ class DataTransformationService:
             "deploy_tx_id": backend_data.get("deploy_txid"),
             "actual_deploy_txid_for_api": backend_data.get("deploy_txid"),
             "deploy_block_height": backend_data.get("deploy_height"),
-            "deploy_timestamp": DataTransformationService._format_timestamp(
-                backend_data.get("deploy_time")
-            ),
+            "deploy_timestamp": DataTransformationService._format_timestamp(backend_data.get("deploy_time")),
             "creator_address": backend_data.get("deployer"),
             "remaining_supply": DataTransformationService._calculate_remaining_supply(
                 backend_data.get("max"), backend_data.get("minted")
@@ -36,7 +32,6 @@ class DataTransformationService:
 
     @staticmethod
     def transform_operation(backend_data: Dict) -> Dict:
-        """Transform backend operation data to API format"""
         return {
             "id": backend_data.get("id"),
             "tx_id": backend_data.get("txid"),
@@ -45,14 +40,12 @@ class DataTransformationService:
             "tick": backend_data.get("tick"),
             "max_supply_str": backend_data.get("max_supply_str"),
             "limit_per_mint_str": backend_data.get("limit_per_mint_str"),
-            "amount_str": backend_data.get("amount"),
+            "amount": backend_data.get("amount"),
             "decimals_str": backend_data.get("decimals_str"),
             "block_height": backend_data.get("height"),
             "block_hash": backend_data.get("block_hash", ""),
             "tx_index": backend_data.get("tx_index"),
-            "timestamp": DataTransformationService._format_timestamp(
-                backend_data.get("time")
-            ),
+            "timestamp": DataTransformationService._format_timestamp(backend_data.get("time")),
             "address": backend_data.get("from_address"),
             "processed": backend_data.get("is_valid"),
             "valid": backend_data.get("is_valid"),
@@ -61,7 +54,6 @@ class DataTransformationService:
 
     @staticmethod
     def transform_address_balance(backend_data: Dict) -> Dict:
-        """Transform backend address balance data to API format"""
         available_bal = backend_data.get("balance", "0")
         return {
             "pkscript": "",
@@ -74,7 +66,6 @@ class DataTransformationService:
 
     @staticmethod
     def transform_holder_info(backend_data: Dict) -> Dict:
-        """Transform backend holder data to API format"""
         available_bal = backend_data.get("balance", "0")
         return {
             "pkscript": "",
@@ -87,14 +78,13 @@ class DataTransformationService:
 
     @staticmethod
     def transform_transaction_operation(backend_data: Dict) -> Dict:
-        """Transform backend transaction operation data to NEW Op model format"""
         return {
             "id": backend_data.get("id"),
             "tx_id": backend_data.get("tx_id"),
             "txid": backend_data.get("txid"),
             "op": backend_data.get("op"),
             "ticker": backend_data.get("ticker"),
-            "amount_str": backend_data.get("amount_str"),
+            "amount": backend_data.get("amount"),
             "from_address": backend_data.get("from_address"),
             "to_address": backend_data.get("to_address"),
             "block_height": backend_data.get("block_height"),
@@ -106,7 +96,6 @@ class DataTransformationService:
 
     @staticmethod
     def transform_indexer_status(backend_data: Dict) -> Dict:
-        """Transform backend indexer status data to API format"""
         return {
             "current_block_height_network": backend_data.get("network_height"),
             "last_indexed_block_main_chain": backend_data.get("indexed_height"),
@@ -115,14 +104,12 @@ class DataTransformationService:
 
     @staticmethod
     def transform_paginated_response(backend_response: Dict) -> List:
-        """Transform paginated backend response to direct array"""
         if isinstance(backend_response, dict) and "data" in backend_response:
             return backend_response["data"]
         return backend_response if isinstance(backend_response, list) else []
 
     @staticmethod
     def _format_timestamp(timestamp: Any) -> Optional[str]:
-        """Convert timestamp to ISO 8601 format with Z suffix"""
         if timestamp is None:
             return None
 
@@ -137,16 +124,13 @@ class DataTransformationService:
             elif isinstance(timestamp, datetime):
                 return timestamp.isoformat() + "Z"
         except Exception as e:
-            logger.warning(
-                "Failed to format timestamp", timestamp=timestamp, error=str(e)
-            )
+            logger.warning("Failed to format timestamp", timestamp=timestamp, error=str(e))
             return None
 
         return None
 
     @staticmethod
     def _calculate_remaining_supply(max_supply: str, current_supply: str) -> str:
-        """Calculate remaining supply from max and current supply"""
         if not max_supply or not current_supply:
             return "0"
 
@@ -165,7 +149,6 @@ class DataTransformationService:
 
     @staticmethod
     def add_ticker_to_holders(holders: List[Dict], ticker: str) -> List[Dict]:
-        """Add ticker field to holder data"""
         for holder in holders:
             if isinstance(holder, dict):
                 holder["ticker"] = ticker
@@ -173,7 +156,6 @@ class DataTransformationService:
 
     @staticmethod
     def add_ticker_to_operations(operations: List[Dict], ticker: str) -> List[Dict]:
-        """Add ticker field to operation data if missing"""
         for op in operations:
             if isinstance(op, dict) and not op.get("tick"):
                 op["tick"] = ticker

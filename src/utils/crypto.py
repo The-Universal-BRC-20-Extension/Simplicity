@@ -2,11 +2,10 @@
 Cryptographic utilities for Bitcoin address validation and script parsing.
 """
 
-import hashlib
 import re
-from typing import Optional
-
+import hashlib
 import base58
+from typing import Optional
 
 
 def is_valid_bitcoin_address(address: str) -> bool:
@@ -34,7 +33,7 @@ def is_valid_bitcoin_address(address: str) -> bool:
     elif address.startswith("bc1"):
         return _is_valid_bech32_address(address)
 
-    # Testnet addresses (for development)
+    # Testnet addresses
     elif address.startswith("m") or address.startswith("n"):
         return _is_valid_base58_address(address, 0x6F)  # Testnet P2PKH
     elif address.startswith("2"):
@@ -142,31 +141,19 @@ def extract_address_from_script(script_hex: str) -> Optional[str]:
         return _hash160_to_p2sh_address(script_hash)
 
     # P2WPKH: OP_0 <20 bytes>
-    elif (
-        len(script_bytes) == 22
-        and script_bytes[0] == 0x00  # OP_0
-        and script_bytes[1] == 0x14
-    ):  # Push 20 bytes
+    elif len(script_bytes) == 22 and script_bytes[0] == 0x00 and script_bytes[1] == 0x14:  # OP_0  # Push 20 bytes
 
         pubkey_hash = script_bytes[2:22]
         return _hash160_to_bech32_address(pubkey_hash, 0)
 
     # P2WSH: OP_0 <32 bytes>
-    elif (
-        len(script_bytes) == 34
-        and script_bytes[0] == 0x00  # OP_0
-        and script_bytes[1] == 0x20
-    ):  # Push 32 bytes
+    elif len(script_bytes) == 34 and script_bytes[0] == 0x00 and script_bytes[1] == 0x20:  # OP_0  # Push 32 bytes
 
         script_hash = script_bytes[2:34]
         return _hash256_to_bech32_address(script_hash, 0)
 
     # P2TR: OP_1 <32 bytes>
-    elif (
-        len(script_bytes) == 34
-        and script_bytes[0] == 0x51  # OP_1
-        and script_bytes[1] == 0x20
-    ):  # Push 32 bytes
+    elif len(script_bytes) == 34 and script_bytes[0] == 0x51 and script_bytes[1] == 0x20:  # OP_1  # Push 32 bytes
 
         taproot_output = script_bytes[2:34]
         return _taproot_to_bech32_address(taproot_output, 1)
@@ -245,16 +232,12 @@ def extract_op_return_data(script_hex: str) -> Optional[bytes]:
     try:
         script_bytes = bytes.fromhex(script_hex)
 
-        # OP_RETURN followed by push data
         if len(script_bytes) < 2:
             return None
 
-        # Skip OP_RETURN opcode (0x6a)
         pos = 1
 
-        # Handle different push data opcodes
         if script_bytes[pos] <= 75:
-            # Direct push (OP_PUSHDATA with length 1-75)
             push_length = script_bytes[pos]
             pos += 1
         elif script_bytes[pos] == 0x4C:  # OP_PUSHDATA1
@@ -275,11 +258,9 @@ def extract_op_return_data(script_hex: str) -> Optional[bytes]:
         else:
             return None
 
-        # Check if we have enough bytes for the data
         if len(script_bytes) < pos + push_length:
             return None
 
-        # Extract the data
         return script_bytes[pos : pos + push_length]
 
     except (ValueError, IndexError):

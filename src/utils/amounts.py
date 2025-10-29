@@ -1,130 +1,80 @@
 """
 Safe amount handling utilities for BRC-20 operations.
-All amounts are handled as strings to prevent integer overflow.
+All amounts are handled as Decimal to prevent integer overflow and ensure precision.
 """
 
 import re
+from decimal import Decimal, getcontext
+from typing import Union
+
+getcontext().prec = 50
 
 
-def is_valid_amount(amount_str: str) -> bool:
-    """
-    Validate that amount is a positive number (integer or decimal)
-
-    Args:
-        amount_str: String representation of amount
-
-    Returns:
-        bool: True if valid, False otherwise
-    """
-    if not isinstance(amount_str, str):
-        return False
-
-    # Allow integers and decimals (no scientific notation)
-    if not re.match(r"^[0-9]+(\.[0-9]+)?$", amount_str):
-        return False
-
-    # Check if it's positive (not zero)
-    try:
-        amount = float(amount_str)
+def is_valid_amount(amount: Union[str, Decimal]) -> bool:
+    """Validate that amount is a positive number (integer or decimal)"""
+    if isinstance(amount, Decimal):
         return amount > 0
+
+    if not isinstance(amount, str):
+        return False
+
+    if not re.match(r"^[0-9]+(\.[0-9]+)?$", amount):
+        return False
+
+    try:
+        amount_float = float(amount)
+        return amount_float > 0
     except ValueError:
         return False
 
 
-def add_amounts(a: str, b: str) -> str:
-    """
-    Safely add two string amounts
+def add_amounts(a: Union[str, Decimal], b: Union[str, Decimal]) -> Decimal:
+    """Safely add two amounts"""
+    a_decimal = Decimal(str(a)) if not isinstance(a, Decimal) else a
+    b_decimal = Decimal(str(b)) if not isinstance(b, Decimal) else b
 
-    Args:
-        a: First amount as string
-        b: Second amount as string
-
-    Returns:
-        str: Sum as string
-
-    Raises:
-        ValueError: If amounts are invalid
-    """
-    if not is_valid_amount(a) and a != "0":
+    if not is_valid_amount(a_decimal) and a_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {a}")
-    if not is_valid_amount(b) and b != "0":
+    if not is_valid_amount(b_decimal) and b_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {b}")
 
-    # Use Decimal for precise arithmetic
-    from decimal import Decimal, getcontext
-
-    # Set precision high enough for large numbers
-    getcontext().prec = 50
-
-    result = Decimal(a) + Decimal(b)
-
-    # Format without scientific notation
-    return format(result, "f")
+    result = a_decimal + b_decimal
+    return result
 
 
-def subtract_amounts(a: str, b: str) -> str:
-    """
-    Safely subtract two string amounts (a - b)
-
-    Args:
-        a: Amount to subtract from
-        b: Amount to subtract
-
-    Returns:
-        str: Difference as string
+def subtract_amounts(a: Union[str, Decimal], b: Union[str, Decimal]) -> Decimal:
+    """Safely subtract two amounts
 
     Raises:
         ValueError: If amounts are invalid or result is negative
     """
-    if not is_valid_amount(a) and a != "0":
+    a_decimal = Decimal(str(a)) if not isinstance(a, Decimal) else a
+    b_decimal = Decimal(str(b)) if not isinstance(b, Decimal) else b
+
+    if not is_valid_amount(a_decimal) and a_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {a}")
-    if not is_valid_amount(b) and b != "0":
+    if not is_valid_amount(b_decimal) and b_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {b}")
 
-    # Use Decimal for precise arithmetic
-    from decimal import Decimal, getcontext
-
-    # Set precision high enough for large numbers
-    getcontext().prec = 50
-
-    a_dec = Decimal(a)
-    b_dec = Decimal(b)
-
-    if a_dec < b_dec:
+    if a_decimal < b_decimal:
         raise ValueError(f"Insufficient amount: {a} - {b} would be negative")
 
-    result = a_dec - b_dec
-    return format(result, "f")
+    result = a_decimal - b_decimal
+    return result
 
 
-def compare_amounts(a: str, b: str) -> int:
-    """
-    Compare two string amounts
+def compare_amounts(a: Union[str, Decimal], b: Union[str, Decimal]) -> int:
+    a_decimal = Decimal(str(a)) if not isinstance(a, Decimal) else a
+    b_decimal = Decimal(str(b)) if not isinstance(b, Decimal) else b
 
-    Args:
-        a: First amount
-        b: Second amount
-
-    Returns:
-        int: -1 if a < b, 0 if a == b, 1 if a > b
-
-    Raises:
-        ValueError: If amounts are invalid
-    """
-    if not is_valid_amount(a) and a != "0":
+    if not is_valid_amount(a_decimal) and a_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {a}")
-    if not is_valid_amount(b) and b != "0":
+    if not is_valid_amount(b_decimal) and b_decimal != Decimal("0"):
         raise ValueError(f"Invalid amount: {b}")
 
-    # Use Decimal for precise comparison
-    from decimal import Decimal
-
-    a_dec = Decimal(a)
-    b_dec = Decimal(b)
-
-    if a_dec < b_dec:
+    if a_decimal < b_decimal:
         return -1
-    elif a_dec > b_dec:
+    elif a_decimal > b_decimal:
         return 1
     else:
         return 0
@@ -146,7 +96,6 @@ def is_amount_less_than(a: str, b: str) -> bool:
 
 
 def is_amount_less_equal(a: str, b: str) -> bool:
-    """Check if amount a <= b"""
     return compare_amounts(a, b) <= 0
 
 
@@ -155,24 +104,33 @@ def is_amount_equal(a: str, b: str) -> bool:
     return compare_amounts(a, b) == 0
 
 
-def normalize_amount(amount_str: str) -> str:
-    """
-    Normalize amount string (remove leading zeros)
+def normalize_amount(amount: Union[str, Decimal]) -> str:
+    if isinstance(amount, Decimal):
+        return format(amount, "f").rstrip("0").rstrip(".")
 
-    Args:
-        amount_str: Amount string
+    if not isinstance(amount, str):
+        raise ValueError("Amount must be string or Decimal")
 
-    Returns:
-        str: Normalized amount
-    """
-    if not isinstance(amount_str, str):
-        raise ValueError("Amount must be string")
+    normalized = amount.lstrip("0") or "0"
 
-    # Remove leading zeros but keep at least one digit
-    normalized = amount_str.lstrip("0") or "0"
-
-    # Validate the result
     if not re.match(r"^[0-9]+$", normalized):
-        raise ValueError(f"Invalid amount format: {amount_str}")
+        raise ValueError(f"Invalid amount format: {amount}")
 
     return normalized
+
+
+"""Compatibility functions for backward compatibility"""
+
+
+def add_amounts_str(a: str, b: str) -> str:
+    result = add_amounts(a, b)
+    return format(result, "f").rstrip("0").rstrip(".")
+
+
+def subtract_amounts_str(a: str, b: str) -> str:
+    result = subtract_amounts(a, b)
+    return format(result, "f").rstrip("0").rstrip(".")
+
+
+def compare_amounts_str(a: str, b: str) -> int:
+    return compare_amounts(a, b)

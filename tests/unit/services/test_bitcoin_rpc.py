@@ -5,9 +5,7 @@ from src.services.bitcoin_rpc import (
     BitcoinRPCService,
     ConnectionState,
 )
-from src.utils.logging import setup_logging, emit_test_log
-
-setup_logging()
+from src.utils.logging import emit_test_log
 
 # Helper for JSONRPCException with .code and .message
 
@@ -52,9 +50,7 @@ def test_constructor_missing_user(mock_settings):
     mock_settings.BITCOIN_RPC_USER = None
     mock_settings.BITCOIN_RPC_PASSWORD = "pass"
     with pytest.raises(ValueError, match="Bitcoin RPC username is required"):
-        BitcoinRPCService(
-            rpc_url="http://localhost:8332", rpc_user=None, rpc_password="pass"
-        )
+        BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user=None, rpc_password="pass")
 
 
 @patch("src.services.bitcoin_rpc.settings")
@@ -63,9 +59,7 @@ def test_constructor_missing_password(mock_settings):
     mock_settings.BITCOIN_RPC_USER = "user"
     mock_settings.BITCOIN_RPC_PASSWORD = None
     with pytest.raises(ValueError, match="Bitcoin RPC password is required"):
-        BitcoinRPCService(
-            rpc_url="http://localhost:8332", rpc_user="user", rpc_password=None
-        )
+        BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password=None)
 
 
 def test_constructor_placeholder_password(monkeypatch):
@@ -78,16 +72,12 @@ def test_constructor_placeholder_password(monkeypatch):
 
 
 def test_constructor_url_with_at(monkeypatch):
-    service = BitcoinRPCService(
-        rpc_url="http://user:pass@localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://user:pass@localhost:8332", rpc_user="user", rpc_password="pass")
     assert service.connection_url == "http://user:pass@localhost:8332"
 
 
 def test_is_connection_error_all_indicators():
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     indicators = [
         "request-sent",
         "connection refused",
@@ -104,9 +94,7 @@ def test_is_connection_error_all_indicators():
 
 
 def test_is_connection_error_negative():
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     err = Exception("some other error")
     assert not service._is_connection_error(err)
 
@@ -115,20 +103,17 @@ def test_is_connection_error_negative():
 
 
 def test_force_reconnect_sets_rpc_none_and_logs(caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = object()
     with caplog.at_level("INFO"):
         service._force_reconnect()
     assert service._rpc is None
+    # Check for the message in JSON log format
     assert "Forced RPC reconnection" in caplog.text
 
 
 def test_health_check_healthy(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = MagicMock()
     service._rpc.getblockcount.return_value = 123
     service._last_health_check = 0
@@ -138,9 +123,7 @@ def test_health_check_healthy(monkeypatch, mock_rpc):
 
 
 def test_health_check_interval(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._connection_state = ConnectionState.HEALTHY
     service._last_health_check = time.time()
     service._health_check_interval = 1000
@@ -148,9 +131,7 @@ def test_health_check_interval(monkeypatch, mock_rpc):
 
 
 def test_health_check_unhealthy(monkeypatch, mock_rpc, caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = MagicMock()
     service._rpc.getblockcount.side_effect = Exception("fail")
     service._last_health_check = 0
@@ -164,9 +145,7 @@ def test_health_check_unhealthy(monkeypatch, mock_rpc, caplog):
 
 
 def test_health_check_degraded(monkeypatch, mock_rpc, caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = MagicMock()
     service._rpc.getblockcount.side_effect = Exception("fail")
     service._last_health_check = 0
@@ -180,9 +159,7 @@ def test_health_check_degraded(monkeypatch, mock_rpc, caplog):
 
 
 def test_get_rpc_connection_healthy(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = None
     service._connection_state = ConnectionState.HEALTHY
     mock_instance = MagicMock()
@@ -194,9 +171,7 @@ def test_get_rpc_connection_healthy(monkeypatch, mock_rpc):
 
 
 def test_get_rpc_connection_failed_reconnect(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = None
     service._connection_state = ConnectionState.FAILED
     mock_instance = MagicMock()
@@ -208,9 +183,7 @@ def test_get_rpc_connection_failed_reconnect(monkeypatch, mock_rpc):
 
 
 def test_get_rpc_connection_auth_error(monkeypatch, mock_rpc, caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = None
     mock_rpc.side_effect = Exception("401 Unauthorized")
     with caplog.at_level("ERROR"):
@@ -220,9 +193,7 @@ def test_get_rpc_connection_auth_error(monkeypatch, mock_rpc, caplog):
 
 
 def test_get_rpc_connection_connection_refused(monkeypatch, mock_rpc, caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = None
     mock_rpc.side_effect = Exception("connection refused")
     with caplog.at_level("ERROR"):
@@ -232,9 +203,7 @@ def test_get_rpc_connection_connection_refused(monkeypatch, mock_rpc, caplog):
 
 
 def test_get_rpc_connection_generic_error(monkeypatch, mock_rpc, caplog):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = None
     mock_rpc.side_effect = Exception("other error")
     with caplog.at_level("ERROR"):
@@ -244,9 +213,7 @@ def test_get_rpc_connection_generic_error(monkeypatch, mock_rpc, caplog):
 
 
 def test_get_connection_status_all_states():
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     for state in ConnectionState:
         service._connection_state = state
         status = service.get_connection_status()
@@ -255,9 +222,7 @@ def test_get_connection_status_all_states():
 
 
 def test_get_best_block_hash_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getbestblockhash.return_value = "hash"
     service._rpc = mock_instance
@@ -265,9 +230,7 @@ def test_get_best_block_hash_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_best_block_hash_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getbestblockhash.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -276,9 +239,7 @@ def test_get_best_block_hash_jsonrpc_exception(monkeypatch, mock_rpc, patch_slee
 
 
 def test_get_block_count_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockcount.return_value = 42
     service._rpc = mock_instance
@@ -286,9 +247,7 @@ def test_get_block_count_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_count_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockcount.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -297,9 +256,7 @@ def test_get_block_count_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblock.return_value = {"block": 1}
     service._rpc = mock_instance
@@ -307,9 +264,7 @@ def test_get_block_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblock.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -318,9 +273,7 @@ def test_get_block_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_by_height_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockhash.return_value = "hash"
     mock_instance.getblock.return_value = {"block": 2}
@@ -329,9 +282,7 @@ def test_get_block_by_height_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_by_height_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockhash.return_value = "hash"
     mock_instance.getblock.side_effect = make_jsonrpc_exception()
@@ -341,9 +292,7 @@ def test_get_block_by_height_jsonrpc_exception(monkeypatch, mock_rpc, patch_slee
 
 
 def test_get_raw_transaction_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getrawtransaction.return_value = {"tx": 1}
     service._rpc = mock_instance
@@ -351,9 +300,7 @@ def test_get_raw_transaction_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_raw_transaction_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getrawtransaction.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -362,9 +309,7 @@ def test_get_raw_transaction_jsonrpc_exception(monkeypatch, mock_rpc, patch_slee
 
 
 def test_decode_raw_transaction_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.decoderawtransaction.return_value = {"decoded": 1}
     service._rpc = mock_instance
@@ -372,9 +317,7 @@ def test_decode_raw_transaction_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_decode_raw_transaction_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.decoderawtransaction.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -383,9 +326,7 @@ def test_decode_raw_transaction_jsonrpc_exception(monkeypatch, mock_rpc, patch_s
 
 
 def test_get_block_hash_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockhash.return_value = "hash"
     service._rpc = mock_instance
@@ -393,9 +334,7 @@ def test_get_block_hash_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_block_hash_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockhash.side_effect = make_jsonrpc_exception()
     service._rpc = mock_instance
@@ -404,9 +343,7 @@ def test_get_block_hash_jsonrpc_exception(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_blockchain_info_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockchaininfo.return_value = {"info": 1}
     service._rpc = mock_instance
@@ -414,9 +351,7 @@ def test_get_blockchain_info_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_get_network_info_success(monkeypatch, mock_rpc, patch_sleep):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getnetworkinfo.return_value = {"net": 1}
     service._rpc = mock_instance
@@ -424,9 +359,7 @@ def test_get_network_info_success(monkeypatch, mock_rpc, patch_sleep):
 
 
 def test_test_connection_success(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockcount.return_value = 123
     service._rpc = mock_instance
@@ -434,9 +367,7 @@ def test_test_connection_success(monkeypatch, mock_rpc):
 
 
 def test_test_connection_failure(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockcount.side_effect = Exception("fail")
     service._rpc = mock_instance
@@ -444,9 +375,7 @@ def test_test_connection_failure(monkeypatch, mock_rpc):
 
 
 def test_is_mainnet_true(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockchaininfo.return_value = {"chain": "main"}
     service._rpc = mock_instance
@@ -454,9 +383,7 @@ def test_is_mainnet_true(monkeypatch, mock_rpc):
 
 
 def test_is_mainnet_false(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     mock_instance = MagicMock()
     mock_instance.getblockchaininfo.return_value = {"chain": "test"}
     service._rpc = mock_instance
@@ -464,18 +391,14 @@ def test_is_mainnet_false(monkeypatch, mock_rpc):
 
 
 def test_close_sets_rpc_none():
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = MagicMock()
     service.close()
     assert service._rpc is None
 
 
 def test_reset_connection_sets_rpc_none(monkeypatch, mock_rpc):
-    service = BitcoinRPCService(
-        rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass"
-    )
+    service = BitcoinRPCService(rpc_url="http://localhost:8332", rpc_user="user", rpc_password="pass")
     service._rpc = MagicMock()
     monkeypatch.setattr(service, "test_connection", lambda: True)
     service.reset_connection()
@@ -504,10 +427,7 @@ def test_retry_on_rpc_error_retries_and_raises(monkeypatch, caplog):
     assert d.calls == 3
     assert d._connection_state == ConnectionState.FAILED
     assert "RPC call failed, retrying" in caplog.text
-    assert any(
-        r.levelname == "ERROR" and "RPC call failed after all retries" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any(r.levelname == "ERROR" and "RPC call failed after all retries" in r.getMessage() for r in caplog.records)
 
 
 def test_retry_on_rpc_error_succeeds_after_retry(monkeypatch, caplog):
@@ -555,8 +475,7 @@ def test_retry_on_rpc_error_jsonrpc_exception(monkeypatch, caplog):
 
 
 def test_caplog_structlog_diagnostics(caplog):
-    setup_logging()
     with caplog.at_level("DEBUG"):
-        emit_test_log()
+        emit_test_log("Test diagnostic message")
     print("caplog.records:", caplog.records)
     print("caplog.text:", caplog.text)

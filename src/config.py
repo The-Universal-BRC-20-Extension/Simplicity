@@ -1,10 +1,25 @@
-from typing import ClassVar
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import validator
+from pydantic_settings import BaseSettings
+from typing import Optional, Dict, Any, ClassVar
 
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "postgresql://user:password@localhost:5432/ubrc20_indexer"
+    DB_USER: str = "user"
+    DB_PASSWORD: str = "password"
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "brc20"
+    DATABASE_URL: Optional[str] = None
+
+    @validator("DATABASE_URL", pre=True)
+    def assemble_db_connection(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
+        if isinstance(v, str):
+            return v
+        return (
+            f"postgresql+psycopg2://{values.get('DB_USER')}:{values.get('DB_PASSWORD')}@"
+            f"{values.get('DB_HOST')}:{values.get('DB_PORT')}/{values.get('DB_NAME')}"
+        )
 
     # Bitcoin RPC
     BITCOIN_RPC_URL: str = "http://localhost:8332"
@@ -21,6 +36,11 @@ class Settings(BaseSettings):
         984444  # Block height when strict mint OP_RETURN position validation starts
     )
 
+    # Marketplace template change block height
+    MARKETPLACE_TRANSFER_BLOCK_HEIGHT: int = (
+        901350  # Block height when new marketplace transfer template validation starts
+    )
+
     # Performance
     MAX_WORKERS: int = 1  # Sequential processing
     DB_POOL_SIZE: int = 5
@@ -28,9 +48,7 @@ class Settings(BaseSettings):
 
     # Monitoring
     LOG_LEVEL: str = "INFO"
-    LOG_NON_BRC20_OPERATIONS: bool = (
-        False  # Optional debug logging for non-BRC20 OP_RETURNs
-    )
+    LOG_NON_BRC20_OPERATIONS: bool = False  # Optional logging for non-BRC20 OP_RETURNs
     METRICS_ENABLED: bool = True
     HEALTH_CHECK_INTERVAL: int = 60
 
@@ -50,7 +68,21 @@ class Settings(BaseSettings):
     # Indexer Version
     INDEXER_VERSION: str = "1.0.0"
 
-    model_config: ClassVar[SettingsConfigDict] = {"env_file": ".env"}
+    LOG_MARKETPLACE_METRICS: bool = True
+    VALIDATE_PROCESSING_CONSISTENCY: bool = True
+
+    # OPI Configuration
+    ENABLE_OPI: bool = True
+    STOP_ON_OPI_ERROR: bool = True
+
+    # Enabled OPIs: operation name -> processor class import path
+    ENABLED_OPIS: ClassVar[Dict[str, str]] = {
+        "test_opi": "src.opi.operations.test_opi.processor.TestOPIProcessor",
+    }
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

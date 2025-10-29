@@ -1,9 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from src.services.cache_service import CacheService
-from src.utils.logging import setup_logging
-
-setup_logging()
 
 
 @pytest.fixture

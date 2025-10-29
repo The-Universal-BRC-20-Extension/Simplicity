@@ -1,10 +1,7 @@
+from typing import Dict, Any, Optional
 import logging
-from typing import Any, Dict, Optional
-
-from ..utils.bitcoin import (
-    extract_address_from_script,
-)
 from .bitcoin_rpc import BitcoinRPCService
+from ..utils.bitcoin import extract_address_from_script
 
 
 class UTXOResolutionService:
@@ -28,9 +25,7 @@ class UTXOResolutionService:
         output = tx_data["vout"][vout]
         script_pub_key = output.get("scriptPubKey", {})
 
-        addresses = script_pub_key.get("addresses", None) or script_pub_key.get(
-            "address", None
-        )
+        addresses = script_pub_key.get("addresses", None) or script_pub_key.get("address", None)
         if addresses:
             if isinstance(addresses, list) and addresses:
                 return addresses[0]

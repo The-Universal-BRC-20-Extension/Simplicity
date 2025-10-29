@@ -2,16 +2,16 @@
 Bitcoin RPC service for blockchain interaction.
 """
 
-import random
 import time
-from enum import Enum
-from functools import wraps
-from typing import Any, Dict
-
-import structlog
+import random
+from typing import Dict, Any, List
 from bitcoinrpc.authproxy import AuthServiceProxy, JSONRPCException
-
 from src.config import settings
+import structlog
+from functools import wraps
+from enum import Enum
+
+logger = structlog.get_logger()
 
 
 class ConnectionState(Enum):
@@ -20,9 +20,7 @@ class ConnectionState(Enum):
     FAILED = "failed"
 
 
-def retry_on_rpc_error(
-    max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0
-):
+def retry_on_rpc_error(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0):
     """
     Decorator for automatic retry with exponential backoff on RPC errors.
 
@@ -36,7 +34,7 @@ def retry_on_rpc_error(
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             last_exception = None
-            logger = getattr(self, "logger", structlog.get_logger())
+
             for attempt in range(max_retries + 1):
                 try:
                     return func(self, *args, **kwargs)
@@ -63,7 +61,7 @@ def retry_on_rpc_error(
                         break
 
                     delay = min(base_delay * (2**attempt), max_delay)
-                    jitter = random.uniform(0, delay * 0.1)
+                    jitter = random.uniform(0, delay * 0.1)  # nosec B311
                     actual_delay = delay + jitter
 
                     logger.info(
@@ -91,9 +89,7 @@ class BitcoinRPCService:
     and connection management to prevent "Request-sent" errors.
     """
 
-    def __init__(
-        self, rpc_url: str = None, rpc_user: str = None, rpc_password: str = None
-    ):
+    def __init__(self, rpc_url: str = None, rpc_user: str = None, rpc_password: str = None):
         """
         Initialize Bitcoin RPC service with enhanced error handling.
 
@@ -113,7 +109,7 @@ class BitcoinRPCService:
         if not self.rpc_password:
             raise ValueError("Bitcoin RPC password is required")
 
-        if self.rpc_password == "your_rpc_password_here":
+        if self.rpc_password == "your_rpc_password_here":  # nosec B105
             raise ValueError(
                 "Bitcoin RPC password is set to placeholder value. "
                 "For rpcauth setup, use the actual password (not the hash). "
@@ -126,13 +122,9 @@ class BitcoinRPCService:
                 self.connection_url = self.rpc_url
             else:
                 protocol, rest = self.rpc_url.split("://", 1)
-                self.connection_url = (
-                    f"{protocol}://{self.rpc_user}:{self.rpc_password}@{rest}"
-                )
+                self.connection_url = f"{protocol}://{self.rpc_user}:{self.rpc_password}@{rest}"
         else:
-            self.connection_url = (
-                f"http://{self.rpc_user}:{self.rpc_password}@{self.rpc_url}"
-            )
+            self.connection_url = f"http://{self.rpc_user}:{self.rpc_password}@{self.rpc_url}"
 
         self._rpc = None
         self._connection_state = ConnectionState.HEALTHY
@@ -140,9 +132,8 @@ class BitcoinRPCService:
         self._health_check_interval = 30
         self._consecutive_failures = 0
         self._max_consecutive_failures = 5
-        self.logger = structlog.get_logger()
 
-        self.logger.info(
+        logger.info(
             "Bitcoin RPC service initialized",
             rpc_url=self.rpc_url,
             rpc_user=self.rpc_user,
@@ -169,9 +160,9 @@ class BitcoinRPCService:
         if self._rpc is not None:
             try:
                 self._rpc = None
-                self.logger.info("Forced RPC reconnection")
+                logger.info("Forced RPC reconnection")
             except Exception as e:
-                self.logger.warning("Error during forced reconnection", error=str(e))
+                logger.warning("Error during forced reconnection", error=str(e))
 
     def _health_check(self) -> bool:
         """
@@ -193,7 +184,7 @@ class BitcoinRPCService:
             self._consecutive_failures = 0
             self._last_health_check = current_time
 
-            self.logger.debug("RPC health check passed")
+            logger.debug("RPC health check passed")
             return True
 
         except Exception as e:
@@ -201,14 +192,14 @@ class BitcoinRPCService:
 
             if self._consecutive_failures >= self._max_consecutive_failures:
                 self._connection_state = ConnectionState.FAILED
-                self.logger.error(
+                logger.error(
                     "RPC health check failed, connection marked as failed",
                     error=str(e),
                     consecutive_failures=self._consecutive_failures,
                 )
             else:
                 self._connection_state = ConnectionState.DEGRADED
-                self.logger.warning(
+                logger.warning(
                     "RPC health check failed, connection degraded",
                     error=str(e),
                     consecutive_failures=self._consecutive_failures,
@@ -232,13 +223,13 @@ class BitcoinRPCService:
 
         if self._rpc is None:
             try:
-                self.logger.info("Creating new RPC connection")
+                logger.info("Creating new RPC connection")
                 self._rpc = AuthServiceProxy(self.connection_url)
                 self._connection_state = ConnectionState.HEALTHY
 
                 self._rpc.getblockcount()
 
-                self.logger.info("RPC connection established successfully")
+                logger.info("RPC connection established successfully")
 
             except Exception as e:
                 self._connection_state = ConnectionState.FAILED
@@ -249,12 +240,11 @@ class BitcoinRPCService:
                         f"Bitcoin RPC authentication failed: {e}\n"
                         "For rpcauth setup:\n"
                         "1. Check your bitcoin.conf has: rpcauth=bitcoinrpc:hash$salt\n"
-                        "2. Use the ORIGINAL password (not the hash) in "
-                        "BITCOIN_RPC_PASSWORD\n"
+                        "2. Use the ORIGINAL password (not the hash) in BITCOIN_RPC_PASSWORD\n"
                         "3. Ensure rpcallowip=127.0.0.1 is set\n"
                         "4. Restart Bitcoin Core after config changes"
                     )
-                    self.logger.error("RPC authentication error", error=auth_error_msg)
+                    logger.error("RPC authentication error", error=auth_error_msg)
                     raise ConnectionError(auth_error_msg)
                 elif "connection refused" in error_msg:
                     conn_error_msg = (
@@ -262,12 +252,12 @@ class BitcoinRPCService:
                         "Check that:\n"
                         "1. Bitcoin Core is running\n"
                         "2. RPC server is enabled (server=1 in bitcoin.conf)\n"
-                        f"3. RPC port {self.rpc_url} is accessible"
+                        "3. RPC port {self.rpc_url} is accessible"
                     )
-                    self.logger.error("RPC connection refused", error=conn_error_msg)
+                    logger.error("RPC connection refused", error=conn_error_msg)
                     raise ConnectionError(conn_error_msg)
                 else:
-                    self.logger.error("Failed to create RPC connection", error=str(e))
+                    logger.error("Failed to create RPC connection", error=str(e))
                     raise ConnectionError(f"Failed to connect to Bitcoin RPC: {e}")
 
         return self._rpc
@@ -341,7 +331,11 @@ class BitcoinRPCService:
         """
         try:
             rpc = self._get_rpc_connection()
-            return rpc.getblock(block_hash, verbosity)
+            block = rpc.getblock(block_hash, verbosity)
+            transactions = block.get("tx", [])
+            if transactions and not isinstance(transactions[0], dict):
+                logger.error("Block transactions are not dicts! Example: %s", transactions[0])
+            return block
         except JSONRPCException as e:
             raise JSONRPCException(f"Failed to get block {block_hash}: {e}")
 
@@ -450,6 +444,24 @@ class BitcoinRPCService:
         except JSONRPCException as e:
             raise JSONRPCException(f"Failed to get blockchain info: {e}")
 
+    @retry_on_rpc_error(max_retries=3, base_delay=1.0, max_delay=30.0)
+    def get_raw_mempool(self) -> List[str]:
+        """
+        Get raw mempool transaction IDs with automatic retry.
+
+        Returns:
+            List[str]: List of transaction IDs in mempool
+
+        Raises:
+            ConnectionError: If RPC connection fails after retries
+            JSONRPCException: If RPC call fails after retries
+        """
+        try:
+            rpc = self._get_rpc_connection()
+            return rpc.getrawmempool()
+        except JSONRPCException as e:
+            raise JSONRPCException(f"Failed to get raw mempool: {e}")
+
     def test_connection(self) -> bool:
         """
         Test RPC connection with health check.
@@ -500,9 +512,9 @@ class BitcoinRPCService:
                 self._rpc = None
                 self._connection_state = ConnectionState.HEALTHY
                 self._consecutive_failures = 0
-                self.logger.info("RPC connection closed")
+                logger.info("RPC connection closed")
             except Exception as e:
-                self.logger.warning("Error during RPC connection close", error=str(e))
+                logger.warning("Error during RPC connection close", error=str(e))
 
     def reset_connection(self):
         """
@@ -518,7 +530,7 @@ class BitcoinRPCService:
             self._consecutive_failures = 0
             self._last_health_check = 0
 
-            self.logger.info(
+            logger.info(
                 "RPC connection reset completed",
                 rpc_url=self.rpc_url,
                 rpc_user=self.rpc_user,
@@ -526,11 +538,11 @@ class BitcoinRPCService:
 
             test_result = self.test_connection()
             if not test_result:
-                self.logger.error("RPC connection test failed after reset")
+                logger.error("RPC connection test failed after reset")
                 raise ConnectionError("RPC connection test failed after reset")
 
-            self.logger.info("RPC connection reset and test successful")
+            logger.info("RPC connection reset and test successful")
 
         except Exception as e:
-            self.logger.error("Error during RPC connection reset", error=str(e))
+            logger.error("Error during RPC connection reset", error=str(e))
             raise e

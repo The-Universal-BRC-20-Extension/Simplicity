@@ -4,7 +4,6 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-sqlalchemy = "*"
 psycopg2-binary = "*"
 alembic = "*"
 requests = "*"
@@ -23,6 +22,12 @@ autoflake = "*"
 isort = "*"
 pytest = "*"
 httpx = "*"
+pytest-cov = "*"
+async-timeout = "*"
+sqlalchemy = "*"
+mypy = "*"
+bandit = "*"
+safety = "*"
 
 [dev-packages]
 pytest = "*"
@@ -37,4 +42,4 @@ safety = "*"
 pre-commit = "*"
 
 [requires]
-python_version = ">=3.11,<3.12"
+python_version = "3.11"

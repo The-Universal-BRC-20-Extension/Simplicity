@@ -1,46 +1,46 @@
+from pydantic import BaseModel, Field, field_serializer
 from typing import List, Optional
-
-from pydantic import BaseModel, Field
-from pydantic import ConfigDict
+from decimal import Decimal
 
 
 class OrmConfig(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 
 class Brc20InfoItem(OrmConfig):
     ticker: str = Field(description="BRC-20 ticker symbol")
     decimals: int = Field(default=8, description="Token decimals")
-    max_supply: str = Field(description="Maximum token supply as string")
-    limit_per_mint: str = Field(description="Maximum amount per mint as string")
+    max_supply: Decimal = Field(description="Maximum token supply")
+    limit_per_mint: Decimal = Field(description="Maximum amount per mint")
     actual_deploy_txid_for_api: str = Field(description="Deploy transaction ID (txid)")
-    deploy_tx_id: str = Field(
-        description="Deploy transaction ID (same as actual_deploy_txid_for_api)"
-    )
+    deploy_tx_id: str = Field(description="Deploy transaction ID (same as actual_deploy_txid_for_api)")
     deploy_block_height: int = Field(description="Block height of deployment")
     deploy_timestamp: str = Field(description="Deploy timestamp (ISO 8601 string)")
     creator_address: str = Field(default="", description="Address that deployed token")
-    remaining_supply: str = Field(description="Remaining mintable supply as string")
-    current_supply: str = Field(description="Currently minted supply as string")
+    remaining_supply: Decimal = Field(description="Remaining mintable supply")
+    current_supply: Decimal = Field(description="Currently minted supply")
     holders: int = Field(description="Current number of token holders")
+
+    @field_serializer("max_supply", "limit_per_mint", "remaining_supply", "current_supply")
+    def serialize_dec_to_str(self, v: Decimal, _info):
+        return str(v) if v is not None else None
 
 
 BRC20InfoItem = Brc20InfoItem
 
 
 class AddressBalance(OrmConfig):
-    pkscript: str = Field(
-        default="", description="The pkscript (always empty for Phase 8-3A)"
-    )
+    pkscript: str = Field(default="", description="The pkscript (always empty for Phase 8-3A)")
     ticker: str = Field(description="The BRC20 ticker symbol")
-    wallet: str = Field(
-        description="The holder's address (field named 'wallet' not 'address')"
-    )
-    overall_balance: str = Field(description="Total balance held as string")
-    available_balance: str = Field(
-        description="Available balance as string (same as overall_balance)"
-    )
+    wallet: str = Field(description="The holder's address (field named 'wallet' not 'address')")
+    overall_balance: Decimal = Field(description="Total balance held")
+    available_balance: Decimal = Field(description="Available balance (same as overall_balance)")
     block_height: int = Field(description="Last block height affecting this balance")
+
+    @field_serializer("overall_balance", "available_balance")
+    def serialize_balance_to_str(self, v: Decimal, _info):
+        return str(v) if v is not None else None
 
 
 class Op(OrmConfig):
@@ -49,18 +49,18 @@ class Op(OrmConfig):
     txid: Optional[str] = Field(None, description="Traditional transaction ID (txid)")
     op: str = Field(description="BRC-20 operation type (deploy, mint, transfer)")
     ticker: str = Field(description="Ticker concerned")
-    amount_str: Optional[str] = Field(None, description="Operation amount")
+    amount: Optional[Decimal] = Field(None, description="Operation amount")
     block_height: int = Field(description="Block height")
     block_hash: str = Field(description="Block hash")
     tx_index: int = Field(description="Transaction index in block")
     timestamp: str = Field(description="Operation timestamp (ISO 8601 string)")
-    from_address: Optional[str] = Field(
-        None, description="Sender address (for transfers)"
-    )
-    to_address: Optional[str] = Field(
-        None, description="Recipient address (for transfers)"
-    )
+    from_address: Optional[str] = Field(None, description="Sender address (for transfers)")
+    to_address: Optional[str] = Field(None, description="Recipient address (for transfers)")
     valid: Optional[bool] = Field(None, description="Is the BRC-20 operation valid?")
+
+    @field_serializer("amount")
+    def serialize_amount_to_str(self, v: Decimal, _info):
+        return str(v) if v is not None else None
 
 
 class IndexerStatus(BaseModel):
@@ -76,12 +76,27 @@ class ErrorResponse(BaseModel):
 
 class PaginationParams(BaseModel):
     page: int = Field(default=1, ge=1, description="Page number (1-based)")
-    limit: int = Field(
-        default=100, ge=1, le=1000, description="Maximum records to return"
+    limit: int = Field(default=100, ge=1, description="Maximum records to return (no upper limit)")
+    skip: int = Field(default=0, ge=0, description="Number of records to skip (calculated from page)")
+
+
+class GetAllParams(BaseModel):
+    max_results: Optional[int] = Field(default=None, ge=1, description="Maximum results to return (None = unlimited)")
+    chunk_size: int = Field(
+        default=10000,
+        ge=1000,
+        le=50000,
+        description="Chunk size for processing large datasets",
     )
-    skip: int = Field(
-        default=0, ge=0, description="Number of records to skip (calculated from page)"
-    )
+    include_invalid: bool = Field(default=False, description="Include invalid operations")
+    operation_type: Optional[str] = Field(default=None, description="Filter by operation type (deploy, mint, transfer)")
+
+
+class GetAllResponse(BaseModel):
+    total_count: int = Field(description="Total number of records available")
+    returned_count: int = Field(description="Number of records returned in this response")
+    has_more: bool = Field(description="Whether there are more records available")
+    data: List = Field(description="Array of records")
 
 
 class BRC20InfoList(BaseModel):

@@ -11,9 +11,8 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.models.block import ProcessedBlock
 from src.models.transaction import BRC20Operation
-from src.utils.exceptions import IndexerError
-
 from .bitcoin_rpc import BitcoinRPCService
+from src.utils.exceptions import IndexerError
 
 
 class ReorgHandler:
@@ -42,9 +41,7 @@ class ReorgHandler:
             True if reorg detected, False otherwise
         """
         try:
-            processed_block = (
-                self.db.query(ProcessedBlock).filter_by(height=height).first()
-            )
+            processed_block = self.db.query(ProcessedBlock).filter_by(height=height).first()
             if not processed_block:
                 return False
 
@@ -96,17 +93,11 @@ class ReorgHandler:
             Height of common ancestor
         """
         current_height = start_height
-        max_depth = min(
-            settings.MAX_REORG_DEPTH, start_height - settings.START_BLOCK_HEIGHT
-        )
+        max_depth = min(settings.MAX_REORG_DEPTH, start_height - settings.START_BLOCK_HEIGHT)
 
         for _ in range(max_depth):
             try:
-                processed_block = (
-                    self.db.query(ProcessedBlock)
-                    .filter_by(height=current_height)
-                    .first()
-                )
+                processed_block = self.db.query(ProcessedBlock).filter_by(height=current_height).first()
                 if not processed_block:
                     current_height -= 1
                     continue
@@ -119,14 +110,10 @@ class ReorgHandler:
                 current_height -= 1
 
             except Exception as e:
-                self.logger.error(
-                    "Error finding common ancestor", height=current_height, error=str(e)
-                )
+                self.logger.error("Error finding common ancestor", height=current_height, error=str(e))
                 current_height -= 1
 
-        fallback_height = max(
-            settings.START_BLOCK_HEIGHT, start_height - settings.MAX_REORG_DEPTH
-        )
+        fallback_height = max(settings.START_BLOCK_HEIGHT, start_height - settings.MAX_REORG_DEPTH)
         self.logger.warning(
             "Could not find common ancestor, using fallback",
             fallback_height=fallback_height,
@@ -143,16 +130,10 @@ class ReorgHandler:
         try:
             self.logger.info("Rolling back to height", target_height=target_height)
 
-            deleted_blocks = (
-                self.db.query(ProcessedBlock)
-                .filter(ProcessedBlock.height > target_height)
-                .delete()
-            )
+            deleted_blocks = self.db.query(ProcessedBlock).filter(ProcessedBlock.height > target_height).delete()
 
             deleted_operations = (
-                self.db.query(BRC20Operation)
-                .filter(BRC20Operation.block_height > target_height)
-                .delete()
+                self.db.query(BRC20Operation).filter(BRC20Operation.block_height > target_height).delete()
             )
 
             self.logger.info(

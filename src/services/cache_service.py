@@ -1,9 +1,8 @@
-import json
-import os
-from typing import Any, Optional
-
 import redis
+import json
 import structlog
+from typing import Optional, Any
+import os
 
 logger = structlog.get_logger()
 

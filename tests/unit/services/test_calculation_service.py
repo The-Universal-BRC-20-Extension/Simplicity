@@ -4,9 +4,6 @@ from src.services.calculation_service import BRC20CalculationService
 from src.models.deploy import Deploy
 from src.models.balance import Balance
 from src.models.transaction import BRC20Operation
-from src.utils.logging import setup_logging
-
-setup_logging()
 
 
 @pytest.fixture
@@ -136,9 +133,7 @@ def test_get_ticker_transactions_success(mock_db):
     query.limit.return_value = query
     query.all.return_value = [(op, block_hash)]
     mock_db.query.return_value = query
-    with patch.object(
-        service, "_map_operation_to_op_model", return_value={"txid": "txid1"}
-    ):
+    with patch.object(service, "_map_operation_to_op_model", return_value={"txid": "txid1"}):
         result = service.get_ticker_transactions("foo")
     assert result["total"] == 1
     assert result["data"][0]["txid"] == "txid1"

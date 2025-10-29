@@ -1,65 +1,28 @@
-import logging
 import structlog
+import logging
 
 
 def setup_logging():
-    """Setup structured logging for caplog/pytest compatibility and production."""
-    # Use ConsoleRenderer for tests, JSONRenderer for prod
-    is_test = any(
-        mod
-        for mod in logging.root.manager.loggerDict
-        if "pytest" in mod or "test" in mod
-    )
-    renderer = (
-        structlog.dev.ConsoleRenderer()
-        if is_test
-        else structlog.processors.JSONRenderer()
-    )
-
-    formatter = structlog.stdlib.ProcessorFormatter(
-        processor=renderer,
-        foreign_pre_chain=[
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.add_log_level,
-        ],
-    )
-
-    # Use basicConfig to set up the root logger and handler
+    """Setup structured logging configuration"""
     logging.basicConfig(
         level=logging.INFO,
-        format=None,  # Formatter is set by handler
-        handlers=[logging.StreamHandler()],
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    # Set the formatter for the first handler (StreamHandler)
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers:
-        handler.setFormatter(formatter)
 
     structlog.configure(
         processors=[
-            structlog.stdlib.filter_by_level,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+            structlog.processors.JSONRenderer(),
         ],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
+        logger_factory=structlog.PrintLoggerFactory(),
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
         cache_logger_on_first_use=True,
     )
 
-    # Emit a test log to verify routing
-    logger = structlog.get_logger()
-    logger.info("setup_logging complete", test_mode=is_test)
 
-
-def emit_test_log():
+def emit_test_log(message: str, level: str = "INFO", **kwargs):
+    """Emit a test log message"""
     logger = structlog.get_logger()
-    logger.debug("test debug log")
-    logger.info("test info log")
-    logger.warning("test warning log")
-    logger.error("test error log")
-    # Print logger name and handlers
-    root_logger = logging.getLogger()
-    print(f"Root logger name: {root_logger.name}")
-    print(f"Root logger handlers: {root_logger.handlers}")
-    print(f"Logger effective level: {root_logger.getEffectiveLevel()}")
+    log_method = getattr(logger, level.lower(), logger.info)
+    log_method(message, **kwargs)
