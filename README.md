@@ -58,6 +58,18 @@ The OPI (Operation Proposal Improvement) framework allows for seamless integrati
   - **Features:** Ordinals integration, witness data processing, external service validation
   - **Status:** Architecture complete, implementation in progress
 
+#### **New: Wrap (W) and Swap Init**
+
+- **Wrap (W)**
+  - Locks BTC into a Taproot (P2TR) contract using a verifiable template (multisig + CSV branch).
+  - A dedicated Wrap Validator reconstructs the expected P2TR address from witness data and verifies the mint amount.
+  - API: `POST /v1/wrap/validate` for validation; related read endpoints under `/v1/wrap`.
+
+- **Swap Init (intent creation)**
+  - Creates a time-bound swap intent recorded as a `swap_position` with `status` in {`active`, `expired`, `closed`}.
+  - Useful for liquidity and TVL estimates without moving funds across chains.
+  - Query via swap endpoints and the `swap_positions` model introduced in the schema.
+
 #### **How to Add New OPIs:**
 
 1. **Create OPI Module:** Implement `BaseProcessor` interface
@@ -95,7 +107,7 @@ For maintainer-specific guidance, see [OPI Maintenance Guide](docs/architecture/
     ```
 4.  **Verify:**
     ```bash
-    curl http://localhost:8080/v1/indexer/brc20/health
+    curl http://localhost:8083/v1/indexer/brc20/health
     # Expected output: { "status": "ok" }
     ```
 
@@ -155,7 +167,7 @@ make help            # Show all available commands
 
 ## API Documentation
 
-A comprehensive, interactive API documentation (Swagger UI) is available at `http://localhost:8080/docs` after launching the server.
+A comprehensive, interactive API documentation (Swagger UI) is available at `http://localhost:8083/docs` after launching the server.
 
 For a static overview, see the [Full API Documentation](./docs/api/README.md).
 
@@ -163,13 +175,13 @@ For a static overview, see the [Full API Documentation](./docs/api/README.md).
 
 ```bash
 # Health Check
-curl http://localhost:8080/v1/indexer/brc20/health
+curl http://localhost:8083/v1/indexer/brc20/health
 
 # List all indexed tokens
-curl http://localhost:8080/v1/indexer/brc20/list
+curl http://localhost:8083/v1/indexer/brc20/list
 
 # Get detailed information for a specific token
-curl http://localhost:8080/v1/indexer/brc20/{tick}
+curl http://localhost:8083/v1/indexer/brc20/{tick}
 ```
 
 
