@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     gcc \
+    pkg-config \
+    libsecp256k1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pipenv
@@ -32,6 +34,7 @@ ENV HOME=/home/indexer
 RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
+    libsecp256k1-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder

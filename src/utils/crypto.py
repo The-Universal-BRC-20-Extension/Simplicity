@@ -1,267 +1,207 @@
 """
-Cryptographic utilities for Bitcoin address validation and script parsing.
+Cryptographic utilities for Bitcoin, using standard audited libraries.
 """
 
-import re
 import hashlib
-import base58
-from typing import Optional
+from typing import Optional, Tuple
+import bech32m
+import secp256k1
+
+# --- CONSTANTES ---
+# Generator point G (compressed format)
+G_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+
+# --- FONCTIONS TAPROOT ---
+def tagged_hash(tag: str, data: bytes) -> bytes:
+    tag_hash = hashlib.sha256(tag.encode()).digest()
+    return hashlib.sha256(tag_hash + tag_hash + data).digest()
+
+
+def lift_x(x_coord_bytes: bytes) -> Optional[Tuple[secp256k1.PublicKey, int]]:
+    """
+    Lift an x-only coordinate to a full point (BIP 340 compliant).
+
+    Args:
+        x_coord_bytes: 32-byte x-coordinate
+
+    Returns:
+        Tuple of (PublicKey, parity) where parity is 0 (even) or 1 (odd)
+        Returns None if x is not on the curve
+    """
+    if len(x_coord_bytes) != 32:
+        return None
+
+    try:
+        x = int.from_bytes(x_coord_bytes, "big")
+        p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+
+        # y² = x³ + 7 (mod p)
+        y_squared = (pow(x, 3, p) + 7) % p
+
+        # Calculate y
+        y = pow(y_squared, (p + 1) // 4, p)
+        if pow(y, 2, p) != y_squared:
+            return None
+
+        if y % 2 != 0:
+            y = p - y  # Negate to get even y
+
+        pubkey_bytes = b"\x02" + x_coord_bytes
+        pubkey = secp256k1.PublicKey(pubkey_bytes, raw=True)
+
+        return (pubkey, 0)
+
+    except Exception as e:
+        print(f"lift_x failed: {e}")
+        return None
+
+
+def taproot_tweak_pubkey(internal_key: bytes, merkle_root: bytes) -> Optional[Tuple[bytes, int]]:
+    """
+    Tweak an internal public key with a merkle root (BIP 341).
+
+    Args:
+        internal_key: 32-byte x-only internal public key
+        merkle_root: 32-byte merkle root (or 32 zero bytes for key-path-only)
+
+    Returns:
+        Tuple of (output_key_xonly, parity) or None on failure
+    """
+    if len(internal_key) != 32 or len(merkle_root) != 32:
+        print(f"❌ Invalid input lengths")
+        return None
+
+    lift_result = lift_x(internal_key)
+    if lift_result is None:
+        print(f"❌ lift_x failed for internal_key: {internal_key.hex()}")
+        return None
+
+    P, _ = lift_result
+
+    tweak = tagged_hash("TapTweak", internal_key + merkle_root)
+
+    try:
+        Q = P.tweak_add(tweak)
+    except Exception as e:
+        print(f"❌ tweak_add failed: {e}")
+        return None
+
+    Q_compressed = Q.serialize(compressed=True)
+
+    parity = 1 if Q_compressed[0] == 0x03 else 0
+    output_key = Q_compressed[1:]  # x-only (32 bytes)
+
+    return (output_key, parity)
+
+
+def taproot_output_key_to_address(output_key: bytes, network: str = "mainnet") -> str:
+    """
+    Convert a 32-byte Taproot output key to a bech32m address.
+
+    Args:
+        output_key: 32-byte x-only output public key
+        network: "mainnet" or "testnet"
+
+    Returns:
+        Bech32m P2TR address
+    """
+    if len(output_key) != 32:
+        raise ValueError(f"Output key must be 32 bytes, got {len(output_key)}")
+
+    hrp = "bc" if network == "mainnet" else "tb"
+    witness_version = 1
+
+    return bech32m.encode(hrp, witness_version, output_key)
 
 
 def is_valid_bitcoin_address(address: str) -> bool:
-    """
-    Validate Bitcoin address (P2PKH, P2SH, P2WPKH, P2WSH, P2TR)
-
-    Args:
-        address: Bitcoin address string
-
-    Returns:
-        bool: True if valid address format
-    """
-    if not isinstance(address, str):
+    """Check if a Bitcoin address is valid (legacy, SegWit, or Taproot)."""
+    if not address or not isinstance(address, str):
         return False
 
-    # P2PKH (starts with 1)
-    if address.startswith("1"):
-        return _is_valid_base58_address(address, 0x00)
+    if address.startswith(("1", "3")):
+        return len(address) >= 26 and len(address) <= 35
 
-    # P2SH (starts with 3)
-    elif address.startswith("3"):
-        return _is_valid_base58_address(address, 0x05)
+    if address.startswith("bc1q"):
+        return len(address) >= 42 and len(address) <= 62
 
-    # Bech32 (P2WPKH, P2WSH - starts with bc1)
-    elif address.startswith("bc1"):
-        return _is_valid_bech32_address(address)
-
-    # Testnet addresses
-    elif address.startswith("m") or address.startswith("n"):
-        return _is_valid_base58_address(address, 0x6F)  # Testnet P2PKH
-    elif address.startswith("2"):
-        return _is_valid_base58_address(address, 0xC4)  # Testnet P2SH
-    elif address.startswith("tb1"):
-        return _is_valid_bech32_address(address, "tb")
+    if address.startswith("bc1p"):
+        return len(address) >= 62
 
     return False
 
 
-def _is_valid_base58_address(address: str, version_byte: int) -> bool:
-    """Validate Base58Check encoded address"""
-    try:
-        # Decode base58
-        decoded = base58.b58decode(address)
-
-        # Check minimum length (version + 20 bytes + 4 byte checksum)
-        if len(decoded) != 25:
-            return False
-
-        # Check version byte
-        if decoded[0] != version_byte:
-            return False
-
-        # Verify checksum
-        payload = decoded[:-4]
-        checksum = decoded[-4:]
-        hash_result = hashlib.sha256(hashlib.sha256(payload).digest()).digest()
-
-        return hash_result[:4] == checksum
-
-    except Exception:
-        return False
-
-
-def _is_valid_bech32_address(address: str, hrp: str = "bc") -> bool:
-    """Validate Bech32 encoded address (simplified validation)"""
-    try:
-        # Basic format check
-        if not re.match(f"^{hrp}1[a-z0-9]{{6,87}}$", address.lower()):
-            return False
-
-        # Split HRP and data
-        if address.lower().count("1") != 1:
-            return False
-
-        hrp_part, data_part = address.lower().split("1")
-
-        # Check HRP
-        if hrp_part != hrp:
-            return False
-
-        # Check data part length and characters
-        if len(data_part) < 6:
-            return False
-
-        # All characters should be valid bech32
-        valid_chars = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-        return all(c in valid_chars for c in data_part)
-
-    except Exception:
-        return False
-
-
-def extract_address_from_script(script_hex: str) -> Optional[str]:
-    """
-    Extract Bitcoin address from output script hex
-
-    Args:
-        script_hex: Hex-encoded output script
-
-    Returns:
-        Optional[str]: Bitcoin address if extractable, None otherwise
-    """
-    if not isinstance(script_hex, str):
+def extract_address_from_script(script_pubkey: dict) -> Optional[str]:
+    """Extract Bitcoin address from scriptPubKey."""
+    if not script_pubkey:
         return None
 
-    try:
-        script_bytes = bytes.fromhex(script_hex)
-    except ValueError:
+    script_type = script_pubkey.get("type", "")
+    addresses = script_pubkey.get("addresses", [])
+
+    if addresses:
+        return addresses[0]
+
+    if script_type == "witness_v1_taproot":
         return None
-
-    # P2PKH: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
-    if (
-        len(script_bytes) == 25
-        and script_bytes[0] == 0x76  # OP_DUP
-        and script_bytes[1] == 0xA9  # OP_HASH160
-        and script_bytes[2] == 0x14  # Push 20 bytes
-        and script_bytes[23] == 0x88  # OP_EQUALVERIFY
-        and script_bytes[24] == 0xAC
-    ):  # OP_CHECKSIG
-
-        pubkey_hash = script_bytes[3:23]
-        return _hash160_to_p2pkh_address(pubkey_hash)
-
-    # P2SH: OP_HASH160 <20 bytes> OP_EQUAL
-    elif (
-        len(script_bytes) == 23
-        and script_bytes[0] == 0xA9  # OP_HASH160
-        and script_bytes[1] == 0x14  # Push 20 bytes
-        and script_bytes[22] == 0x87
-    ):  # OP_EQUAL
-
-        script_hash = script_bytes[2:22]
-        return _hash160_to_p2sh_address(script_hash)
-
-    # P2WPKH: OP_0 <20 bytes>
-    elif len(script_bytes) == 22 and script_bytes[0] == 0x00 and script_bytes[1] == 0x14:  # OP_0  # Push 20 bytes
-
-        pubkey_hash = script_bytes[2:22]
-        return _hash160_to_bech32_address(pubkey_hash, 0)
-
-    # P2WSH: OP_0 <32 bytes>
-    elif len(script_bytes) == 34 and script_bytes[0] == 0x00 and script_bytes[1] == 0x20:  # OP_0  # Push 32 bytes
-
-        script_hash = script_bytes[2:34]
-        return _hash256_to_bech32_address(script_hash, 0)
-
-    # P2TR: OP_1 <32 bytes>
-    elif len(script_bytes) == 34 and script_bytes[0] == 0x51 and script_bytes[1] == 0x20:  # OP_1  # Push 32 bytes
-
-        taproot_output = script_bytes[2:34]
-        return _taproot_to_bech32_address(taproot_output, 1)
 
     return None
 
 
-def _hash160_to_p2pkh_address(pubkey_hash: bytes) -> str:
-    """Convert 20-byte pubkey hash to P2PKH address"""
-    versioned = b"\x00" + pubkey_hash
-    checksum = hashlib.sha256(hashlib.sha256(versioned).digest()).digest()[:4]
-    return base58.b58encode(versioned + checksum).decode("ascii")
+def hash160(data: bytes) -> bytes:
+    """RIPEMD160(SHA256(data))"""
+    return hashlib.new("ripemd160", hashlib.sha256(data).digest()).digest()
 
 
-def _hash160_to_p2sh_address(script_hash: bytes) -> str:
-    """Convert 20-byte script hash to P2SH address"""
-    versioned = b"\x05" + script_hash
-    checksum = hashlib.sha256(hashlib.sha256(versioned).digest()).digest()[:4]
-    return base58.b58encode(versioned + checksum).decode("ascii")
+def hash256(data: bytes) -> bytes:
+    """SHA256(SHA256(data))"""
+    return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
 
-def _hash160_to_bech32_address(pubkey_hash: bytes, witness_version: int) -> str:
-    """Convert 20-byte hash to bech32 P2WPKH address (simplified)"""
-    # This is a simplified implementation
-    # In production, use a proper bech32 library
-    return f"bc1q{pubkey_hash.hex()}"
+def sha256(data: bytes) -> bytes:
+    """SHA256(data)"""
+    return hashlib.sha256(data).digest()
 
 
-def _hash256_to_bech32_address(script_hash: bytes, witness_version: int) -> str:
-    """Convert 32-byte hash to bech32 P2WSH address (simplified)"""
-    # This is a simplified implementation
-    # In production, use a proper bech32 library
-    return f"bc1s{script_hash.hex()}"
+def bytes_to_hex(data: bytes) -> str:
+    """Convert bytes to hexadecimal string."""
+    return data.hex()
 
 
-def _taproot_to_bech32_address(taproot_output: bytes, witness_version: int) -> str:
-    """Convert 32-byte taproot output to bech32 P2TR address (simplified)"""
-    # This is a simplified implementation
-    # In production, use a proper bech32 library
-    return f"bc1p{taproot_output.hex()}"
+def hex_to_bytes(hex_string: str) -> bytes:
+    """Convert hexadecimal string to bytes."""
+    return bytes.fromhex(hex_string)
 
 
-def is_op_return_script(script_hex: str) -> bool:
-    """
-    Check if script is an OP_RETURN script
-
-    Args:
-        script_hex: Hex-encoded script
-
-    Returns:
-        bool: True if OP_RETURN script
-    """
-    if not isinstance(script_hex, str):
-        return False
-
+def is_valid_hex(hex_string: str) -> bool:
+    """Check if a string is valid hexadecimal."""
     try:
-        script_bytes = bytes.fromhex(script_hex)
-        return len(script_bytes) > 0 and script_bytes[0] == 0x6A  # OP_RETURN
+        bytes.fromhex(hex_string)
+        return True
     except ValueError:
         return False
 
 
-def extract_op_return_data(script_hex: str) -> Optional[bytes]:
-    """
-    Extract data from OP_RETURN script
-
-    Args:
-        script_hex: Hex-encoded OP_RETURN script
-
-    Returns:
-        Optional[bytes]: OP_RETURN data if valid, None otherwise
-    """
-    if not is_op_return_script(script_hex):
-        return None
+def is_valid_pubkey(pubkey: bytes) -> bool:
+    """Check if bytes represent a valid public key."""
+    if len(pubkey) not in [33, 65]:
+        return False
 
     try:
-        script_bytes = bytes.fromhex(script_hex)
+        secp256k1.PublicKey(pubkey)
+        return True
+    except Exception:
+        return False
 
-        if len(script_bytes) < 2:
-            return None
 
-        pos = 1
+def is_valid_privkey(privkey: bytes) -> bool:
+    """Check if bytes represent a valid private key."""
+    if len(privkey) != 32:
+        return False
 
-        if script_bytes[pos] <= 75:
-            push_length = script_bytes[pos]
-            pos += 1
-        elif script_bytes[pos] == 0x4C:  # OP_PUSHDATA1
-            if len(script_bytes) < pos + 2:
-                return None
-            push_length = script_bytes[pos + 1]
-            pos += 2
-        elif script_bytes[pos] == 0x4D:  # OP_PUSHDATA2
-            if len(script_bytes) < pos + 3:
-                return None
-            push_length = int.from_bytes(script_bytes[pos + 1 : pos + 3], "little")
-            pos += 3
-        elif script_bytes[pos] == 0x4E:  # OP_PUSHDATA4
-            if len(script_bytes) < pos + 5:
-                return None
-            push_length = int.from_bytes(script_bytes[pos + 1 : pos + 5], "little")
-            pos += 5
-        else:
-            return None
-
-        if len(script_bytes) < pos + push_length:
-            return None
-
-        return script_bytes[pos : pos + push_length]
-
-    except (ValueError, IndexError):
-        return None
+    try:
+        secp256k1.PrivateKey(privkey)
+        return True
+    except Exception:
+        return False

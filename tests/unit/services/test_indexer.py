@@ -407,7 +407,8 @@ class TestIndexerServiceIntegration:
 
             assert indexer._blocks_processed == 3
 
-            assert mock_db_session.commit.call_count == 3
+            # New behavior commits twice per block (processed_blocks + metrics)
+            assert mock_db_session.commit.call_count == 6
 
             assert mock_db_session.add.call_count == 3
 

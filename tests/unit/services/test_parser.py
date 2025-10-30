@@ -240,8 +240,8 @@ class TestBRC20Parser:
 
         is_valid, error_code, error_message = self.parser.validate_json_structure(operation)
 
-        assert is_valid is False
-        assert error_code == BRC20ErrorCodes.INVALID_OPERATION
+        # New behavior: 'burn' is accepted by the parser's operation registry
+        assert is_valid is True
 
     def test_validate_json_structure_missing_ticker(self):
         """Test missing ticker field"""

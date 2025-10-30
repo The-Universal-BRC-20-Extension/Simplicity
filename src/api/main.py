@@ -6,6 +6,9 @@ import time
 
 from src.api.routers.brc20 import router as brc20_router
 from src.api.routers.mempool import router as mempool_router
+from src.api.routers.validation import router as validation_router
+from src.api.routers.swap import router as swap_router
+from src.api.routers.wrap import router as wrap_router
 from src.utils.logging import setup_logging
 from src.database.connection import get_db
 from src.models.block import ProcessedBlock
@@ -31,6 +34,9 @@ app.add_middleware(
 
 app.include_router(brc20_router, tags=["BRC-20"])
 app.include_router(mempool_router, tags=["Mempool"])
+app.include_router(validation_router, tags=["Validation"])
+app.include_router(swap_router, tags=["Swap"])
+app.include_router(wrap_router, tags=["Wrap"])
 
 
 @app.exception_handler(Exception)
@@ -123,4 +129,4 @@ async def get_concurrency_health():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+    uvicorn.run(app, host="127.0.0.1", port=8083)

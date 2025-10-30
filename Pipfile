@@ -28,6 +28,9 @@ sqlalchemy = "*"
 mypy = "*"
 bandit = "*"
 safety = "*"
+bech32m = "*"
+secp256k1 = "*"
+varint = "*"
 
 [dev-packages]
 pytest = "*"

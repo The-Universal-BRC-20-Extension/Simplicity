@@ -109,6 +109,23 @@ pipenv run alembic upgrade head
 pipenv run python run.py --continuous
 ```
 
+### System Dependencies for Taproot Crypto (Developers)
+
+Taproot helpers use `secp256k1` bindings and Bech32m:
+
+- Install OS libs (macOS):
+  ```bash
+  brew install pkg-config secp256k1
+  ```
+- Install OS libs (Debian/Ubuntu in CI/containers):
+  ```bash
+  sudo apt-get update && sudo apt-get install -y pkg-config libsecp256k1-dev
+  ```
+- Python deps are declared in `Pipfile` and `requirements.txt`:
+  ```bash
+  pipenv run pip install bech32m secp256k1
+  ```
+
 ### Available Commands
 
 The project includes a comprehensive Makefile for common operations:

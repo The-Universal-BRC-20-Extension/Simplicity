@@ -84,7 +84,7 @@ class TestContext:
         balance = context.get_balance("addr1", "TEST")
 
         assert balance == Decimal("50")
-        validator.get_balance.assert_called_once_with("addr1", "TEST", intermediate_balances={})
+        validator.get_balance.assert_called_once_with("addr1", "TEST")
 
     def test_get_total_minted_from_intermediate_state(self):
         state = IntermediateState()

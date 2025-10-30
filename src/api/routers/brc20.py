@@ -61,12 +61,10 @@ async def get_brc20_list(
     try:
         result = calc_service.get_all_tickers_with_stats(start, size)
         data = DataTransformationService.transform_paginated_response(result)
-
         transformed_data = [DataTransformationService.transform_ticker_info(item) for item in data]
-
-        return [Brc20InfoItem(**item) for item in transformed_data]
+        return [Brc20InfoItem.model_validate(item) for item in transformed_data]
     except Exception as e:
-        logger.error("Failed to get BRC20 list", error=str(e))
+        logger.error("Failed to get BRC20 list", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -79,17 +77,15 @@ async def get_all_brc20_list(
     try:
         result = calc_service.get_all_tickers_with_stats_unlimited(max_results)
         data = DataTransformationService.transform_paginated_response(result)
-
         transformed_data = [DataTransformationService.transform_ticker_info(item) for item in data]
-
         return GetAllResponse(
             total_count=result.get("total", 0),
             returned_count=len(transformed_data),
             has_more=len(transformed_data) < result.get("total", 0),
-            data=[Brc20InfoItem(**item) for item in transformed_data],
+            data=[Brc20InfoItem.model_validate(item) for item in transformed_data],
         )
     except Exception as e:
-        logger.error("Failed to get all BRC20 list", error=str(e))
+        logger.error("Failed to get all BRC20 list", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -102,14 +98,12 @@ async def get_ticker_info(
         result = calc_service.get_ticker_stats(ticker)
         if not result:
             raise HTTPException(status_code=404, detail="Ticker not found")
-
         transformed_data = DataTransformationService.transform_ticker_info(result)
-
-        return Brc20InfoItem(**transformed_data)
+        return Brc20InfoItem.model_validate(transformed_data)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get ticker", ticker=ticker, error=str(e))
+        logger.error("Failed to get ticker", ticker=ticker, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

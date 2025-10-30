@@ -55,3 +55,6 @@ uvicorn[standard]==0.35.0; python_version >= '3.9'
 uvloop==0.21.0; python_full_version >= '3.8.0'
 watchfiles==1.1.0; python_version >= '3.9'
 websockets==15.0.1; python_version >= '3.9'
+bech32m==1.0.0
+secp256k1==0.14.0
+varint==1.0.2

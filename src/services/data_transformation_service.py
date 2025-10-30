@@ -16,7 +16,7 @@ class DataTransformationService:
         return {
             "ticker": backend_data.get("tick"),
             "decimals": backend_data.get("decimals"),
-            "max_supply": backend_data.get("max"),
+            "max_supply": backend_data.get("max_supply"),
             "limit_per_mint": backend_data.get("limit"),
             "deploy_tx_id": backend_data.get("deploy_txid"),
             "actual_deploy_txid_for_api": backend_data.get("deploy_txid"),
@@ -24,7 +24,7 @@ class DataTransformationService:
             "deploy_timestamp": DataTransformationService._format_timestamp(backend_data.get("deploy_time")),
             "creator_address": backend_data.get("deployer"),
             "remaining_supply": DataTransformationService._calculate_remaining_supply(
-                backend_data.get("max"), backend_data.get("minted")
+                backend_data.get("max_supply"), backend_data.get("minted")
             ),
             "current_supply": backend_data.get("minted"),
             "holders": backend_data.get("holders"),

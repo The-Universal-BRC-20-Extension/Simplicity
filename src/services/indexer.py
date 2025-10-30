@@ -19,6 +19,8 @@ from src.utils.exceptions import IndexerError, TransferType
 from src.opi.contracts import IntermediateState
 from src.opi.registry import OPIRegistry
 
+# Note: SwapPosition imports removed as position handling is now done via triggers
+
 
 @dataclass
 class BlockProcessingResult:
@@ -68,7 +70,7 @@ class IndexerService:
         if settings.ENABLE_OPI:
             self.opi_registry = OPIRegistry()
             self._register_opi_processors()
-            self.processor.set_opi_registry(self.opi_registry)
+            self.processor.opi_registry = self.opi_registry
 
     def _register_opi_processors(self):
         """Register OPI processors dynamically"""
@@ -690,7 +692,9 @@ class IndexerService:
 
     def process_block_transactions(self, block: Dict[str, Any]) -> List[Any]:
         intermediate_state = IntermediateState()
+        intermediate_state.block_height = block["height"]
         persistence_buffer = []
+        processed_results = []
 
         transactions = block.get("tx", [])
         block_timestamp = block.get("time", 0)
@@ -700,13 +704,21 @@ class IndexerService:
             height=block["height"],
         )
 
+        # NOTE: Swap position expiration is now handled by PostgreSQL triggers on processed_blocks
+        # See migration ffe8d27490fd_add_swap_position_expiration_triggers.py for details
+
         brc20_candidates = self._ultra_fast_brc20_pre_scan(transactions)
 
+        elimination_rate_value = (
+            f"{((len(transactions)-len(brc20_candidates))/len(transactions)*100):.1f}%"
+            if len(transactions) > 0
+            else "N/A"
+        )
         self.logger.debug(
             f"PRE-SCAN RESULTS: {len(brc20_candidates)} BRC-20 candidates found "
             f"from {len(transactions)} transactions",
             height=block["height"],
-            elimination_rate=f"{((len(transactions)-len(brc20_candidates))/len(transactions)*100):.1f}%",
+            elimination_rate=elimination_rate_value,
         )
 
         marketplace_txs, simple_txs = [], []
@@ -741,7 +753,7 @@ class IndexerService:
 
         for tx_data in prioritized_list:
             try:
-                result, objects_to_persist, _ = self.processor.process_transaction(
+                result, objects_to_persist, state_commands = self.processor.process_transaction(
                     tx_data,
                     block_height=block["height"],
                     tx_index=tx_data["original_tx_index"],
@@ -772,26 +784,30 @@ class IndexerService:
                 processed_results.append(error_result)
 
         try:
-            self.processor.flush_pending_balances(intermediate_state)
+            self.processor.flush_balances_from_state(intermediate_state)
 
             for obj in persistence_buffer:
                 self.db.add(obj)
 
-            self.logger.debug(
-                "Flushed pending balance updates for block",
-                height=block["height"],
-                marketplace_count=len(marketplace_txs),
-                simple_count=len(simple_txs),
+            self.logger.info(
+                "Block processing completed successfully",
+                block_height=block["height"],
+                balance_updates=len(intermediate_state.balances),
+                operations_logged=len(persistence_buffer),
             )
+
         except Exception as e:
             self.logger.critical(
-                "CRITICAL: Balance flush failed - INDEXER STOPPING TO PREVENT INCONSISTENCY",
-                height=block["height"],
+                "Block processing failed - Rolling back transaction",
+                block_height=block["height"],
                 error=str(e),
-                action="immediate_stop_to_prevent_database_corruption",
+                balance_updates=len(intermediate_state.balances),
             )
-            self.processor.clear_pending_balances()
+            self.db.rollback()
             raise IndexerError(f"Balance flush failed at block {block['height']}: {e}")
+        else:
+            self.db.commit()
+            self.logger.debug("Block committed to database", block_height=block["height"])
 
         all_results = []
         processed_indices = {r.original_tx_index for r in processed_results}

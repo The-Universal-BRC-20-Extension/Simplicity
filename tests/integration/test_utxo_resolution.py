@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from unittest.mock import ANY
 
 import pytest
 from sqlalchemy.orm import Session
@@ -324,7 +325,11 @@ def test_transfer_input_resolution(processor, mock_db_session, mock_bitcoin_rpc)
         }
     )
 
-    processor.process_transfer(operation, tx_info, mock_validation_result, "test_hex_data", 102)
+    from src.opi.contracts import IntermediateState
+
+    processor.process_transfer(
+        operation, tx_info, mock_validation_result, "test_hex_data", 102, intermediate_state=IntermediateState()
+    )
 
     print(f"update_balance calls: {processor.update_balance.call_args_list}")
 
@@ -334,7 +339,7 @@ def test_transfer_input_resolution(processor, mock_db_session, mock_bitcoin_rpc)
         amount_delta="-100",
         op_type="transfer_out",
         txid="transfer_tx_id",
-        intermediate_balances=None,
+        intermediate_state=ANY,
     )
     processor.update_balance.assert_any_call(
         address="1RecipientAddress",
@@ -342,7 +347,7 @@ def test_transfer_input_resolution(processor, mock_db_session, mock_bitcoin_rpc)
         amount_delta="100",
         op_type="transfer_in",
         txid="transfer_tx_id",
-        intermediate_balances=None,
+        intermediate_state=ANY,
     )
     # Note: get_raw_transaction is not called because we're mocking the address resolution
     # The test focuses on balance updates, not UTXO resolution

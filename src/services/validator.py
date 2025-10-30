@@ -21,6 +21,14 @@ from src.utils.bitcoin import (
 )
 from src.models.deploy import Deploy
 from src.models.balance import Balance
+from src.utils.taproot_unified import (
+    TapscriptTemplates,
+    compute_tapleaf_hash,
+    compute_merkle_root,
+    compute_tweak,
+    derive_output_key,
+)
+from src.utils.crypto import taproot_output_key_to_address
 
 
 class BRC20Validator:
@@ -341,9 +349,102 @@ class BRC20Validator:
                 intermediate_balances=intermediate_balances,
             )
 
+        elif op_type == "burn":
+            return ValidationResult(True)
+
         else:
             return ValidationResult(
                 False,
                 BRC20ErrorCodes.INVALID_OPERATION,
                 f"Unknown operation type: {op_type}",
+            )
+
+    def validate_taproot_contract_creation(
+        self,
+        internal_pubkey_from_commit: bytes,
+        control_blocks: List[bytes],
+        contract_address: str,
+        crypto_data: dict = None,
+    ) -> ValidationResult:
+        try:
+            if len(control_blocks) != 2:
+                return ValidationResult(False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Expected 2 control blocks")
+
+            control_block_multisig = control_blocks[0]
+            control_block_csv = control_blocks[1]
+
+            if len(control_block_multisig) < 33 or len(control_block_csv) < 33:
+                return ValidationResult(False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Control blocks too short")
+
+            internal_pubkey_from_cb_multi = control_block_multisig[1:33]
+            internal_pubkey_from_cb_csv = control_block_csv[1:33]
+
+            if (
+                internal_pubkey_from_cb_multi != internal_pubkey_from_commit
+                or internal_pubkey_from_cb_csv != internal_pubkey_from_commit
+            ):
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Internal pubkey mismatch in control blocks"
+                )
+
+            multisig_script = TapscriptTemplates.create_multisig_script(internal_pubkey_from_commit)
+            csv_script = TapscriptTemplates.create_csv_script()
+
+            print(f"  🔍 Debug Scripts:")
+            print(f"    Multisig script: {multisig_script.hex()}")
+            print(f"    CSV script: {csv_script.hex()}")
+            print(f"    Expected CSV script: {crypto_data['leafs']['csv']['script']}")
+
+            multisig_leaf_hash = compute_tapleaf_hash(multisig_script)
+            csv_leaf_hash = compute_tapleaf_hash(csv_script)
+
+            reconstructed_merkle_root = compute_merkle_root([multisig_leaf_hash, csv_leaf_hash])
+
+            merkle_path_for_multisig = control_block_multisig[33:]
+            print(f"  🔍 Debug Merkle validation:")
+            print(f"    Multisig leaf hash: {multisig_leaf_hash.hex()}")
+            print(f"    CSV leaf hash: {csv_leaf_hash.hex()}")
+            print(f"    Merkle path for multisig: {merkle_path_for_multisig.hex()}")
+            print(f"    Merkle path for CSV: {control_block_csv[33:].hex()}")
+            print(f"    Reconstructed merkle root: {reconstructed_merkle_root.hex()}")
+
+            if merkle_path_for_multisig != csv_leaf_hash:
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Merkle path for multisig is incorrect"
+                )
+
+            merkle_path_for_csv = control_block_csv[33:]
+            if merkle_path_for_csv != multisig_leaf_hash:
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Merkle path for CSV is incorrect"
+                )
+
+            tweak = compute_tweak(internal_pubkey_from_commit, reconstructed_merkle_root)
+
+            result = derive_output_key(internal_pubkey_from_commit, tweak)
+            if not result:
+                return ValidationResult(False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, "Failed to derive output key")
+
+            output_key, parity = result
+
+            recalculated_address = taproot_output_key_to_address(output_key, parity=parity)
+
+            if recalculated_address != contract_address:
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    f"Address mismatch: expected {recalculated_address}, got {contract_address}",
+                )
+
+            return ValidationResult(
+                True,
+                additional_data={
+                    "tapscript_hex": multisig_script.hex(),
+                    "merkle_root": reconstructed_merkle_root.hex(),
+                },
+            )
+
+        except Exception as e:
+            return ValidationResult(
+                False, BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR, f"Cryptographic validation failed: {e}"
             )

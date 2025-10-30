@@ -61,11 +61,11 @@ class BRC20CalculationService:
 
         holder_count = self.db.query(Balance).filter(Balance.ticker == deploy.ticker, Balance.balance != 0).count()
 
-        is_completed = compare_amounts(str(current_supply), deploy.max_supply) >= 0
+        is_completed = compare_amounts(str(current_supply), deploy.max) >= 0
 
         return {
             "tick": deploy.ticker,
-            "max": deploy.max_supply,
+            "max": deploy.max,
             "limit": deploy.limit_per_op,
             "minted": str(current_supply),
             "holders": holder_count,

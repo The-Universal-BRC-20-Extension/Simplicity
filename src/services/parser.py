@@ -11,29 +11,12 @@ from src.utils.bitcoin import is_op_return_script, extract_op_return_data
 class BRC20Parser:
     """Parse and validate BRC-20 OP_RETURN payloads"""
 
-    def __init__(self, opi_registry=None):
-        """Initialize parser"""
-        self.max_op_return_size = 80  # Bitcoin OP_RETURN size limit
-        self.opi_registry = opi_registry
+    def __init__(self):
+        self.max_op_return_size = 80
 
     def extract_op_return_data(self, tx: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
-        """
-        Extract OP_RETURN data from transaction with FAST BRC-20 detection
-
-        Args:
-            tx: Transaction data from Bitcoin RPC
-
-        Returns:
-            Tuple[Optional[str], Optional[int]]: (hex_data, vout_index) or (None, None)
-
-        RULES:
-        - Exactly 1 OP_RETURN per transaction
-        - OP_RETURN ≤ 80 bytes
-        - FAST EXIT if not BRC-20 protocol
-        - Return (None, None) if multiple OP_RETURN or invalid
-        """
         if not isinstance(tx, dict) or "vout" not in tx:
-            return None, None  # ✅ REJECT IMMEDIATELY: Invalid transaction structure
+            return None, None
 
         vouts = tx.get("vout", [])
         if not vouts:
@@ -52,7 +35,7 @@ class BRC20Parser:
             if script_pub_key.get("type") == "nulldata":
                 hex_script = script_pub_key.get("hex", "")
                 if is_op_return_script(hex_script):
-                    if self._is_likely_brc20_fast(hex_script):
+                    if self._is_likely_brc20_fast(hex_script) or self._is_likely_wmint_fast(hex_script):
                         op_return_outputs.append((hex_script, i))
 
         if len(op_return_outputs) != 1:
@@ -76,21 +59,6 @@ class BRC20Parser:
     def extract_op_return_data_with_position_check(
         self, tx: Dict[str, Any], operation_type: str = None
     ) -> Tuple[Optional[str], Optional[int]]:
-        """
-        Extract OP_RETURN data with position validation based on operation type
-
-        Args:
-            tx: Transaction data from Bitcoin RPC
-            operation_type: 'deploy', 'mint', or 'transfer' (if known)
-
-        Returns:
-            Tuple[Optional[str], Optional[int]]: (hex_data, vout_index) or (None, None)
-
-        RULES:
-        - Deploy: OP_RETURN can be in any position (existing behavior)
-        - Mint/Transfer: OP_RETURN must be in first position (vout index 0)
-        - If operation_type unknown, use existing behavior (any position)
-        """
         if not isinstance(tx, dict) or "vout" not in tx:
             return None, None
 
@@ -104,11 +72,6 @@ class BRC20Parser:
             return self._extract_op_return_any_position(tx)
 
     def _extract_op_return_first_position_only(self, tx: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
-        """
-        Extract OP_RETURN data from FIRST output only (for mint/transfer)
-
-        CRITICAL RULE: OP_RETURN must be in the first output (vout index 0)
-        """
         outputs = tx["vout"]
 
         first_output = outputs[0]
@@ -133,12 +96,10 @@ class BRC20Parser:
         if op_return_count != 1:
             return None, None
 
-        # Extract the actual data from first OP_RETURN
         op_return_data = extract_op_return_data(hex_script)
         if op_return_data is None:
             return None, None
 
-        # Check size limit
         try:
             data_bytes = bytes.fromhex(op_return_data)
             if len(data_bytes) > self.max_op_return_size:
@@ -146,23 +107,16 @@ class BRC20Parser:
         except ValueError:
             return None, None
 
-        # Return data and vout index (always 0 for first output)
         return op_return_data, 0
 
     def _extract_op_return_any_position(self, tx: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
-        """
-        Extract OP_RETURN data from any position (for deploy operations)
-
-        This is the existing behavior for deploy operations
-        """
-        # Use existing logic for deploy operations
         return self.extract_op_return_data(tx)
 
     def parse_brc20_operation(self, hex_data: str) -> Dict[str, Any]:
-        """
-        Parse BRC-20 operation with enhanced error handling and FAST protocol detection.
-        """
         try:
+            if self._is_likely_wmint_fast(hex_data):
+                return self.parse_wmint_operation(hex_data)
+
             sanitized_hex = hex_data.replace("\x00", "")
             try:
                 data_bytes = bytes.fromhex(sanitized_hex)
@@ -229,16 +183,8 @@ class BRC20Parser:
                     "error_code": BRC20ErrorCodes.MISSING_OPERATION,
                     "error_message": "Missing operation field 'op'",
                 }
+            valid_operations = ["deploy", "mint", "transfer", "test_opi", "burn", "swap"]
 
-            if self.opi_registry and self.opi_registry.has_processor(op):
-                return {
-                    "success": True,
-                    "data": operation,
-                    "error_code": None,
-                    "error_message": None,
-                }
-
-            valid_operations = ["deploy", "mint", "transfer"]
             if op not in valid_operations:
                 return {
                     "success": False,
@@ -247,20 +193,22 @@ class BRC20Parser:
                     "error_message": f"Invalid operation: {op}, expected one of {valid_operations}",
                 }
             ticker = operation.get("tick")
-            if ticker is None:
-                return {
-                    "success": False,
-                    "data": None,
-                    "error_code": BRC20ErrorCodes.MISSING_TICKER,
-                    "error_message": "Missing ticker field 'tick'",
-                }
-            if not self.validate_ticker_format(ticker):
-                return {
-                    "success": False,
-                    "data": None,
-                    "error_code": BRC20ErrorCodes.EMPTY_TICKER,
-                    "error_message": "Ticker cannot be empty",
-                }
+            # For swap, ticker may be omitted (pair provided in 'init'/'exe')
+            if op != "swap":
+                if ticker is None:
+                    return {
+                        "success": False,
+                        "data": None,
+                        "error_code": BRC20ErrorCodes.MISSING_TICKER,
+                        "error_message": "Missing ticker field 'tick'",
+                    }
+                if not self.validate_ticker_format(ticker):
+                    return {
+                        "success": False,
+                        "data": None,
+                        "error_code": BRC20ErrorCodes.EMPTY_TICKER,
+                        "error_message": "Ticker cannot be empty",
+                    }
             return {
                 "success": True,
                 "data": operation,
@@ -276,21 +224,7 @@ class BRC20Parser:
             }
 
     def validate_json_structure(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
-        """
-        Validate basic JSON structure
 
-        Args:
-            operation: Parsed JSON operation
-
-        Returns:
-            Tuple[bool, Optional[str], Optional[str]]: (is_valid, error_code, error_message)
-
-        RULES:
-        - p MUST be "brc-20"
-        - op MUST be "deploy", "mint" or "transfer"
-        - tick MUST be present and non-empty
-        - Required fields according to operation
-        """
         if not isinstance(operation, dict):
             return (
                 False,
@@ -298,7 +232,6 @@ class BRC20Parser:
                 "Operation must be a JSON object",
             )
 
-        # Check protocol field
         protocol = operation.get("p")
         if protocol is None:
             return False, BRC20ErrorCodes.MISSING_PROTOCOL, "Missing protocol field 'p'"
@@ -310,7 +243,6 @@ class BRC20Parser:
                 f"Invalid protocol: {protocol}, expected 'brc-20'",
             )
 
-        # Check operation field
         op = operation.get("op")
         if op is None:
             return (
@@ -319,7 +251,7 @@ class BRC20Parser:
                 "Missing operation field 'op'",
             )
 
-        valid_operations = ["deploy", "mint", "transfer"]
+        valid_operations = ["deploy", "mint", "transfer", "test_opi", "burn", "swap"]
         if op not in valid_operations:
             return (
                 False,
@@ -327,22 +259,58 @@ class BRC20Parser:
                 f"Invalid operation: {op}, expected one of {valid_operations}",
             )
 
-        # Check ticker field
         ticker = operation.get("tick")
-        if ticker is None:
-            return False, BRC20ErrorCodes.MISSING_TICKER, "Missing ticker field 'tick'"
+        if op != "swap":
+            if ticker is None:
+                return False, BRC20ErrorCodes.MISSING_TICKER, "Missing ticker field 'tick'"
 
-        # Validate ticker format
-        if not self.validate_ticker_format(ticker):
-            return False, BRC20ErrorCodes.EMPTY_TICKER, "Ticker cannot be empty"
+            if not self.validate_ticker_format(ticker):
+                return False, BRC20ErrorCodes.EMPTY_TICKER, "Ticker cannot be empty"
 
-        # Validate operation-specific fields
         if op == "deploy":
             return self._validate_deploy_fields(operation)
         elif op == "mint":
             return self._validate_mint_fields(operation)
         elif op == "transfer":
             return self._validate_transfer_fields(operation)
+        elif op == "swap":
+            return self._validate_swap_fields(operation)
+
+        return True, None, None
+
+    def _validate_swap_fields(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Validate swap operation payload. For now we support `init` flavor only.
+        Required fields:
+          - init: "SRC,DST" tickers string
+          - amt: string amount to lock (decimal)
+          - lock: string blocks (integer >= 1)
+        """
+        init_field = operation.get("init")
+        amt_field = operation.get("amt")
+        lock_field = operation.get("lock")
+
+        if init_field is None:
+            return False, BRC20ErrorCodes.INVALID_OPERATION, "Missing 'init' for swap operation"
+
+        if not isinstance(init_field, str) or "," not in init_field:
+            return False, BRC20ErrorCodes.INVALID_TICKER, "Field 'init' must be 'SRC,DST'"
+
+        if amt_field is None or not isinstance(amt_field, str) or amt_field.strip() == "":
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'amt'"
+
+        if lock_field is None or not isinstance(lock_field, str):
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'lock'"
+        try:
+            lock_int = int(lock_field)
+            if lock_int < 1:
+                return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be >= 1"
+        except Exception:
+            return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be integer string"
+
+        src, dst = [t.strip() for t in init_field.split(",", 1)]
+        if not self.validate_ticker_format(src) or not self.validate_ticker_format(dst):
+            return False, BRC20ErrorCodes.INVALID_TICKER, "Invalid ticker(s) in 'init'"
 
         return True, None, None
 
@@ -370,7 +338,6 @@ class BRC20Parser:
         return True
 
     def _validate_deploy_fields(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Validate deploy operation fields"""
         max_supply = operation.get("m")
         if max_supply is None:
             return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing max supply field 'm'"
@@ -393,7 +360,6 @@ class BRC20Parser:
         return True, None, None
 
     def _validate_mint_fields(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Validate mint operation fields"""
         amount = operation.get("amt")
         if amount is None:
             return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing amount field 'amt'"
@@ -404,7 +370,6 @@ class BRC20Parser:
         return True, None, None
 
     def _validate_transfer_fields(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Validate transfer operation fields"""
         amount = operation.get("amt")
         if amount is None:
             return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing amount field 'amt'"
@@ -417,12 +382,6 @@ class BRC20Parser:
     def parse_transaction(self, tx: Dict[str, Any]) -> Dict[str, Any]:
         """
         Parse complete transaction for BRC-20 operations
-
-        Args:
-            tx: Transaction data from Bitcoin RPC
-
-        Returns:
-            Dict with parsing results
         """
         result = {
             "has_brc20": False,
@@ -451,7 +410,6 @@ class BRC20Parser:
         result["op_return_data"] = hex_data
         result["vout_index"] = vout_index
 
-        # Parse BRC-20 operation
         parse_result = self.parse_brc20_operation(hex_data)
 
         if parse_result["success"]:
@@ -464,7 +422,6 @@ class BRC20Parser:
         return result
 
     def _has_multiple_op_returns(self, tx: Dict[str, Any]) -> bool:
-        """Check if transaction has multiple OP_RETURN outputs"""
         if not isinstance(tx, dict) or "vout" not in tx:
             return False
 
@@ -480,7 +437,6 @@ class BRC20Parser:
         return op_return_count > 1
 
     def extract_multi_transfer_op_returns(self, tx: Dict[str, Any]) -> List[Tuple[str, int]]:
-        """Extracts all BRC-20 transfer OP_RETURNs from a transaction with FAST filtering."""
         if not isinstance(tx, dict) or "vout" not in tx:
             return []
 
@@ -510,17 +466,6 @@ class BRC20Parser:
         return transfer_ops
 
     def _is_likely_brc20_fast(self, hex_script: str) -> bool:
-        """
-        ULTRA-FAST BRC-20 detection without JSON parsing
-
-        Args:
-            hex_script: Complete script hex (with OP_RETURN prefix)
-
-        Returns:
-            bool: True if likely BRC-20, False otherwise
-
-        OPTIMIZATION: String matching before any hex/JSON processing
-        """
         try:
             from src.utils.bitcoin import extract_op_return_data
 
@@ -536,8 +481,27 @@ class BRC20Parser:
         except Exception:
             return False
 
+    def _is_likely_wmint_fast(self, hex_script: str) -> bool:
+        """
+        Fast detection of wmint magic code in OP_RETURN.
+        Magic code: 5B577C4254437C4D5D
+        """
+        try:
+            from src.utils.bitcoin import extract_op_return_data
+
+            op_return_data = extract_op_return_data(hex_script)
+            if not op_return_data:
+                return False
+
+            data_bytes = bytes.fromhex(op_return_data)
+
+            wrap_magic = bytes.fromhex("5B577C4254437C4D5D")
+            return data_bytes.startswith(wrap_magic)
+
+        except Exception:
+            return False
+
     def _is_transfer_operation_fast(self, hex_data: str) -> bool:
-        """Fast check for transfer operation before full JSON parsing."""
         try:
             json_str = bytes.fromhex(hex_data).decode("utf-8")
             return '"p":"brc-20"' in json_str and '"op":"transfer"' in json_str
@@ -547,15 +511,7 @@ class BRC20Parser:
     def validate_multi_transfer_structure(
         self, tx: Dict[str, Any], transfer_ops: List[Tuple[str, int]]
     ) -> ValidationResult:
-        """
-        Validates the strict (OP_RETURN, Recipient) pair structure of multi-transfers.
 
-        Each transfer operation must follow the pattern:
-        - OP_RETURN output at even index position (0, 2, 4...)
-        - Recipient output at the next position (odd index: 1, 3, 5...)
-
-        No limit is imposed on the number of transfers in a single transaction.
-        """
         vouts = tx.get("vout", [])
         for i, (hex_data, op_return_index) in enumerate(transfer_ops):
             expected_op_return_index = 2 * i
@@ -579,7 +535,7 @@ class BRC20Parser:
     def validate_multi_transfer_meta_rules(
         self, parsed_ops: List[Tuple[Dict[str, Any], int]]
     ) -> Tuple[ValidationResult, Optional[str], Optional[str]]:
-        """Validates business rules like single ticker and calculates total amount."""
+
         if not parsed_ops:
             return ValidationResult(True), None, "0"
 
@@ -620,3 +576,57 @@ class BRC20Parser:
             total_amount = add_amounts(total_amount, data.get("amt", "0"))
 
         return ValidationResult(True), first_ticker, total_amount
+
+    def parse_wmint_operation(self, hex_data: str) -> Dict[str, Any]:
+        """
+        Parse wmint operation from hex data.
+        OP_RETURN contains: magic_code (5B577C4254437C4D5D) + control_block (32 bytes)
+
+        Args:
+            hex_data: Hex-encoded OP_RETURN data
+
+        Returns:
+            Dict with parsed operation data or error information
+        """
+        try:
+            data_bytes = bytes.fromhex(hex_data)
+
+            wrap_magic = bytes.fromhex("5B577C4254437C4D5D")
+            if not data_bytes.startswith(wrap_magic):
+                return {
+                    "success": False,
+                    "data": None,
+                    "error_code": BRC20ErrorCodes.INVALID_PROTOCOL,
+                    "error_message": "Not a wmint operation - missing magic code",
+                }
+
+            wrap_data = data_bytes[len(wrap_magic) :]
+
+            if len(wrap_data) < 32:
+                return {
+                    "success": False,
+                    "data": None,
+                    "error_code": BRC20ErrorCodes.INVALID_JSON,
+                    "error_message": "Wmint data too short - missing control_block",
+                }
+
+            control_block = wrap_data[:32]
+
+            return {
+                "success": True,
+                "data": {
+                    "op": "wmint",
+                    "tick": "W",
+                    "control_block": control_block.hex(),
+                },
+                "error_message": None,
+                "error_code": None,
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "data": None,
+                "error_code": BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR,
+                "error_message": f"Wmint parsing error: {str(e)}",
+            }

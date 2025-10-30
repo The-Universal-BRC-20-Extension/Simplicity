@@ -115,12 +115,13 @@ class TestBRC20Processor:
                     ):
                         with patch.object(processor, "update_balance") as mock_update:
                             with patch.object(processor, "log_operation"):
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
                                 result = processor.process_mint(
                                     operation,
                                     tx_info,
-                                    intermediate_balances={},
-                                    intermediate_total_minted={},
-                                    intermediate_deploys={},
+                                    intermediate_state=state,
                                 )
 
                                 assert result.is_valid is True
@@ -131,7 +132,7 @@ class TestBRC20Processor:
                                     amount_delta="500",
                                     op_type="mint",
                                     txid="test_txid",
-                                    intermediate_balances={},
+                                    intermediate_state=state,
                                 )
 
     def test_mint_op_return_position_before_block_height(self, processor):
@@ -183,12 +184,13 @@ class TestBRC20Processor:
                                     "extract_op_return_data",
                                     return_value=("valid_data", 1),
                                 ):
+                                    from src.opi.contracts import IntermediateState
+
+                                    state = IntermediateState()
                                     result = processor.process_mint(
                                         operation,
                                         tx_info,
-                                        intermediate_balances={},
-                                        intermediate_total_minted={},
-                                        intermediate_deploys={},
+                                        intermediate_state=state,
                                     )
 
                                     assert result.is_valid is True
@@ -236,12 +238,13 @@ class TestBRC20Processor:
                                     "extract_op_return_data_with_position_check",
                                     return_value=("valid_data", 0),
                                 ):
+                                    from src.opi.contracts import IntermediateState
+
+                                    state = IntermediateState()
                                     result = processor.process_mint(
                                         operation,
                                         tx_info,
-                                        intermediate_balances={},
-                                        intermediate_total_minted={},
-                                        intermediate_deploys={},
+                                        intermediate_state=state,
                                     )
 
                                     assert result.is_valid is True
@@ -294,12 +297,13 @@ class TestBRC20Processor:
                             "extract_op_return_data_with_position_check",
                             return_value=(None, None),
                         ):
+                            from src.opi.contracts import IntermediateState
+
+                            state = IntermediateState()
                             result = processor.process_mint(
                                 operation,
                                 tx_info,
-                                intermediate_balances={},
-                                intermediate_total_minted={},
-                                intermediate_deploys={},
+                                intermediate_state=state,
                             )
 
                             assert result.is_valid is False
@@ -340,13 +344,16 @@ class TestBRC20Processor:
                         with patch.object(processor, "update_balance") as mock_update:
                             with patch.object(processor, "log_operation"):
                                 validation_result = ValidationResult(True)
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
                                 processor.process_transfer(
                                     operation,
                                     tx_info,
                                     validation_result,
                                     _hex_data,
                                     _block_height,
-                                    intermediate_balances={},
+                                    intermediate_state=state,
                                 )
 
                                 assert mock_update.call_count == 2
@@ -395,13 +402,16 @@ class TestBRC20Processor:
                         with patch.object(processor, "update_balance") as mock_update:
                             with patch.object(processor, "log_operation"):
                                 validation_result = ValidationResult(True)
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
                                 result = processor.process_transfer(
                                     operation,
                                     tx_info,
                                     validation_result,
                                     _hex_data,
                                     _block_height,
-                                    intermediate_balances={},
+                                    intermediate_state=state,
                                 )
 
                                 assert result.is_valid is True
@@ -487,22 +497,32 @@ class TestBRC20Processor:
     def test_update_balance_mint(self, processor, mock_db_session):
         with patch.object(processor.validator, "get_balance", return_value=Decimal("0")):
             with patch.object(Balance, "get_or_create", return_value=create_mock_balance()):
-                processor.update_balance("test_address", "TEST", "100", "mint", "test_txid")
+                from src.opi.contracts import IntermediateState
 
-            assert ("test_address", "TEST") in processor._pending_balance_updates
-            assert processor._pending_balance_updates[("test_address", "TEST")] == Decimal("100")
+                state = IntermediateState()
+                processor.update_balance("test_address", "TEST", "100", "mint", "test_txid", intermediate_state=state)
+
+            assert state.balances[("test_address", "TEST")] == Decimal("100")
 
     def test_update_balance_transfer_debit(self, processor, mock_db_session):
         with patch.object(processor.validator, "get_balance", return_value=Decimal("1000")):
             with patch.object(Balance, "get_or_create", return_value=create_mock_balance()):
-                processor.update_balance("test_address", "TEST", "-100", "transfer_out", "test_txid")
+                from src.opi.contracts import IntermediateState
 
-            assert ("test_address", "TEST") in processor._pending_balance_updates
-            assert processor._pending_balance_updates[("test_address", "TEST")] == Decimal("900")
+                state = IntermediateState()
+                processor.update_balance(
+                    "test_address", "TEST", "-100", "transfer_out", "test_txid", intermediate_state=state
+                )
+
+            assert state.balances[("test_address", "TEST")] == Decimal("900")
 
     def test_update_balance_insufficient_funds(self, processor, mock_db_session):
         with patch.object(processor.validator, "get_balance", return_value=Decimal("50")):
-            result = processor.update_balance("test_address", "TEST", "-100", "transfer_out", "test_txid")
+            from src.opi.contracts import IntermediateState
+
+            result = processor.update_balance(
+                "test_address", "TEST", "-100", "transfer_out", "test_txid", intermediate_state=IntermediateState()
+            )
             assert result is False
 
     def test_classify_transfer_type_simple(self, processor):
@@ -648,6 +668,8 @@ class TestBRC20Processor:
                         "validate_complete_operation",
                         return_value=ValidationResult(True),
                     ):
+                        from src.opi.contracts import IntermediateState
+
                         with patch.object(processor, "update_balance"):
                             with patch.object(processor, "log_operation"):
                                 validation_result = ValidationResult(True)
@@ -657,7 +679,7 @@ class TestBRC20Processor:
                                     validation_result,
                                     _hex_data,
                                     _block_height,
-                                    intermediate_balances={},
+                                    intermediate_state=IntermediateState(),
                                 )
 
                             assert result.is_valid is True

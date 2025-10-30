@@ -13,7 +13,7 @@ getcontext().prec = 50
 def is_valid_amount(amount: Union[str, Decimal]) -> bool:
     """Validate that amount is a positive number (integer or decimal)"""
     if isinstance(amount, Decimal):
-        return amount > 0
+        return amount >= 0
 
     if not isinstance(amount, str):
         return False
@@ -23,7 +23,7 @@ def is_valid_amount(amount: Union[str, Decimal]) -> bool:
 
     try:
         amount_float = float(amount)
-        return amount_float > 0
+        return amount_float >= 0
     except ValueError:
         return False
 

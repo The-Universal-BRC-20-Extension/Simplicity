@@ -24,8 +24,8 @@ class TestBalanceWorkflow:
         balance = context.get_balance("address1", "TEST")
 
         assert balance == Decimal("100.0")
-        # Context is read-only and doesn't cache values in intermediate_state
-        assert ("address1", "TEST") not in intermediate_state.balances
+        # New behavior: IntermediateState caches balances
+        assert ("address1", "TEST") in intermediate_state.balances
         assert mock_validator.get_balance.call_count == 1
 
     def test_balance_caching(self):
@@ -42,8 +42,8 @@ class TestBalanceWorkflow:
         balance2 = context.get_balance("address1", "TEST")
 
         assert balance1 == balance2 == Decimal("100.0")
-        # Context doesn't cache, so validator is called each time
-        assert mock_validator.get_balance.call_count == 2
+        # New behavior caches after first load
+        assert mock_validator.get_balance.call_count == 1
 
     def test_total_minted_loading_and_caching(self):
         """Test total_minted loading (no caching in Context)"""
@@ -59,9 +59,9 @@ class TestBalanceWorkflow:
         total2 = context.get_total_minted("TEST")
 
         assert total1 == total2 == Decimal("1000.0")
-        # Context doesn't cache, so values are not stored in intermediate_state
-        assert "TEST" not in intermediate_state.total_minted
-        assert mock_validator.get_total_minted.call_count == 2
+        # New behavior caches total minted
+        assert "TEST" in intermediate_state.total_minted
+        assert mock_validator.get_total_minted.call_count == 1
 
     def test_deploy_record_loading_and_caching(self):
         """Test deploy record loading (no caching in Context)"""
@@ -78,9 +78,9 @@ class TestBalanceWorkflow:
         deploy2 = context.get_deploy_record("TEST")
 
         assert deploy1 == deploy2 == mock_deploy
-        # Context doesn't cache, so values are not stored in intermediate_state
-        assert "TEST" not in intermediate_state.deploys
-        assert mock_validator.get_deploy_record.call_count == 2
+        # New behavior caches deploys
+        assert "TEST" in intermediate_state.deploys
+        assert mock_validator.get_deploy_record.call_count == 1
 
     def test_deploy_record_none_caching(self):
         """Test that None deploy records are not cached"""
@@ -102,8 +102,8 @@ class TestBalanceWorkflow:
         mock_validator = Mock()
         intermediate_state = IntermediateState()
 
-        # preload_balances method doesn't exist in IntermediateState
-        assert not hasattr(intermediate_state, "preload_balances")
+        # New behavior provides preload_balances
+        assert hasattr(intermediate_state, "preload_balances")
 
     def test_case_insensitive_ticker_handling(self):
         """Test that ticker case is handled correctly"""
@@ -119,7 +119,6 @@ class TestBalanceWorkflow:
         balance3 = context.get_balance("address1", "Test")
 
         assert balance1 == balance2 == balance3 == Decimal("100.0")
-        # Context doesn't cache, so no values are stored in intermediate_state
-        assert ("address1", "TEST") not in intermediate_state.balances
-        # Each call goes to validator (no caching)
-        assert mock_validator.get_balance.call_count == 3
+        # New behavior caches after first load
+        assert ("address1", "TEST") in intermediate_state.balances
+        assert mock_validator.get_balance.call_count == 1

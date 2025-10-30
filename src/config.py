@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # API
     API_HOST: str = "127.0.0.1"
-    API_PORT: int = 8080
+    API_PORT: int = 8083
 
     # Cache Redis
     REDIS_URL: str = "redis://localhost:6380/0"
@@ -71,14 +71,23 @@ class Settings(BaseSettings):
     LOG_MARKETPLACE_METRICS: bool = True
     VALIDATE_PROCESSING_CONSISTENCY: bool = True
 
-    # OPI Configuration
+    # OPI Configuration (for other OPI processors, not wrap operations)
     ENABLE_OPI: bool = True
     STOP_ON_OPI_ERROR: bool = True
 
     # Enabled OPIs: operation name -> processor class import path
     ENABLED_OPIS: ClassVar[Dict[str, str]] = {
         "test_opi": "src.opi.operations.test_opi.processor.TestOPIProcessor",
+        "swap": "src.opi.operations.swap.processor.SwapProcessor",
     }
+
+    # Taproot Wrap Configuration (x-only format, without 03 prefix)
+    OPERATOR_PUBKEY: str = "d22eaaa259553e25fcdd2bba871702ca2c305bdf4384ce6b90db139700949fb5"
+
+    # Wrap Protocol Constants
+    WRAP_TICKER: str = "W"
+    WRAP_DUST_THRESHOLD: int = 660  # satoshis
+    WRAP_MAGIC_CODE: str = "W_PROOF"
 
     class Config:
         env_file = ".env"

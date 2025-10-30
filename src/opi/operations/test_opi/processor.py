@@ -32,7 +32,7 @@ class TestOPIProcessor(BaseProcessor):
                 State(),
             )
 
-        # Check balance using shared validation
+        # Check balance
         current_balance = self.context.get_balance(sender_address, ticker)
         if current_balance < Decimal(amount):
             return (
@@ -64,13 +64,11 @@ class TestOPIProcessor(BaseProcessor):
             is_multi_transfer=False,
         )
 
-        # Create state mutations using shared balance update logic
+        # Create state mutations
         def balance_mutation(state: IntermediateState):
-            """Mutation to burn tokens (decrease balance)"""
             key = (sender_address, ticker.upper())
             current = state.balances.get(key, Decimal(0))
-            new_balance = current - Decimal(amount)
-            state.balances[key] = new_balance
+            state.balances[key] = current - Decimal(amount)
 
         # Return State with ORM objects and mutations
         state = State(orm_objects=[operation_record], state_mutations=[balance_mutation])

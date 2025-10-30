@@ -100,13 +100,14 @@ class TestIntegration:
                         "get_total_minted",
                         return_value="0",
                     ):
+                        from src.opi.contracts import IntermediateState
+
+                        state = IntermediateState()
                         with patch.object(processor, "update_balance") as mock_update:
                             result = processor.process_mint(
                                 mint_operation,
                                 mint_tx,
-                                intermediate_balances={},
-                                intermediate_total_minted={},
-                                intermediate_deploys={},
+                                intermediate_state=state,
                             )
 
                             # Check if the result is valid
@@ -120,7 +121,7 @@ class TestIntegration:
                                 amount_delta="500",
                                 op_type="mint",
                                 txid="mint_txid",
-                                intermediate_balances={},
+                                intermediate_state=state,
                             )
 
         mock_db_session.reset_mock()
@@ -166,6 +167,9 @@ class TestIntegration:
                             "validate_complete_operation",
                             return_value=ValidationResult(True),
                         ):
+                            from src.opi.contracts import IntermediateState
+
+                            state = IntermediateState()
                             with patch.object(processor, "update_balance") as mock_update:
                                 processor.process_transfer(
                                     transfer_operation,
@@ -173,7 +177,7 @@ class TestIntegration:
                                     ValidationResult(True),
                                     "test_hex_data",
                                     800000,
-                                    intermediate_balances={},
+                                    intermediate_state=state,
                                 )
 
                                 assert mock_update.call_count == 2
@@ -232,20 +236,19 @@ class TestIntegration:
                         "get_total_minted",
                         return_value="0",
                     ):
+                        from src.opi.contracts import IntermediateState
+
+                        state = IntermediateState()
                         with patch.object(processor, "update_balance") as mock_update:
                             processor.process_mint(
                                 mint_operation,
                                 mint_tx1,
-                                intermediate_balances={},
-                                intermediate_total_minted={},
-                                intermediate_deploys={},
+                                intermediate_state=state,
                             )
                             processor.process_mint(
                                 mint_operation,
                                 mint_tx2,
-                                intermediate_balances={},
-                                intermediate_total_minted={},
-                                intermediate_deploys={},
+                                intermediate_state=state,
                             )
 
                             assert mock_update.call_count == 2
@@ -308,6 +311,18 @@ class TestIntegration:
                                 "validate_complete_operation",
                                 return_value=ValidationResult(True),
                             ):
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
                                 with patch.object(processor, "update_balance") as mock_update:
                                     processor.process_transfer(
                                         transfer_operation,
@@ -315,7 +330,7 @@ class TestIntegration:
                                         ValidationResult(True),
                                         "test_hex_data",
                                         800000,
-                                        intermediate_balances={},
+                                        intermediate_state=state,
                                     )
 
                                     assert mock_update.call_count == 2
@@ -380,6 +395,9 @@ class TestIntegration:
                                 "validate_complete_operation",
                                 return_value=ValidationResult(True),
                             ):
+                                from src.opi.contracts import IntermediateState
+
+                                state = IntermediateState()
                                 with patch.object(processor, "update_balance") as mock_update:
                                     processor.process_transfer(
                                         transfer_operation,
@@ -387,7 +405,7 @@ class TestIntegration:
                                         ValidationResult(True),
                                         "test_hex_data",
                                         800000,
-                                        intermediate_balances={},
+                                        intermediate_state=state,
                                     )
 
                                     assert mock_update.call_count == 2

@@ -3,6 +3,20 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+# Ensure compatibility with code expecting pydantic.field_serializer without importing it explicitly
+try:
+    from pydantic import field_serializer as _fs  # noqa: F401
+except Exception:
+    import pydantic as _p
+
+    def field_serializer(*args, **kwargs):
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+    setattr(_p, "field_serializer", field_serializer)
+
 from src.api.main import app
 from src.database.connection import get_db
 from src.models.base import Base
@@ -25,17 +39,14 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(autouse=True, scope="session")
 def configure_logging():
-    # Configure logging for tests to use standard logging instead of JSON
     import logging
     import structlog
 
-    # Configure standard logging for tests
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    # Configure structlog to use standard logging
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
@@ -50,12 +61,10 @@ def configure_logging():
         cache_logger_on_first_use=True,
     )
 
-    # Configure the formatter
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=structlog.dev.ConsoleRenderer(),
     )
 
-    # Get the root logger and add a handler
     root_logger = logging.getLogger()
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)

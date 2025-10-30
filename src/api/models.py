@@ -104,3 +104,49 @@ class BRC20InfoList(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+# Wrap Token Validation Models
+class ValidateWrapMintRequest(BaseModel):
+    raw_tx_hex: str = Field(..., description="The raw hexadecimal representation of the Bitcoin transaction.")
+
+
+class ValidationDetails(BaseModel):
+    expected_address: Optional[str] = None
+    found_address: Optional[str] = None
+    expected_amount_sats: Optional[int] = None
+    found_amount_sats: Optional[int] = None
+
+
+class ValidateWrapMintResponse(BaseModel):
+    is_valid: bool
+    reason: str = Field(
+        ..., description="A short code or message indicating the validation result. e.g., 'VALID', 'ADDRESS_MISMATCH'."
+    )
+    details: Optional[ValidationDetails] = None
+
+
+class ValidateAddressRequest(BaseModel):
+    raw_tx_hex: str = Field(..., description="The raw hexadecimal representation of the Bitcoin transaction.")
+
+
+class CryptoDetails(BaseModel):
+    alice_pubkey_xonly: str
+    OPERATOR_PUBKEY_xonly: str
+    internal_key_xonly: str
+    csv_blocks: int
+    multisig_script: str
+    csv_script: str
+    multisig_leaf_hash: str
+    csv_leaf_hash: str
+    merkle_root: str
+    output_key: str
+    parity: int
+
+
+class ValidateAddressResponse(BaseModel):
+    is_valid: bool
+    reason: str = Field(..., description="Result: 'VALID' or error description.")
+    expected_address: Optional[str] = None
+    found_address: Optional[str] = None
+    crypto_details: Optional[CryptoDetails] = None

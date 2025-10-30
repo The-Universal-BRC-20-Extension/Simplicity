@@ -44,6 +44,14 @@ class BRC20ErrorCodes:
     MULTI_TRANSFER_LIMIT_EXCEEDED = "MULTI_TRANSFER_LIMIT_EXCEEDED"
     MULTI_TRANSFER_INSUFFICIENT_TOTAL_BALANCE = "MULTI_TRANSFER_INSUFFICIENT_TOTAL_BALANCE"
 
+    # Wrap protocol errors
+    INVALID_WRAP_STRUCTURE = "INVALID_WRAP_STRUCTURE"
+    INVALID_PROOF_ENVELOPE = "INVALID_PROOF_ENVELOPE"
+    INVALID_CONTROL_BLOCK = "INVALID_CONTROL_BLOCK"
+    WRAP_CONTRACT_EXISTS = "WRAP_CONTRACT_EXISTS"
+    INSUFFICIENT_WRAP_BALANCE = "INSUFFICIENT_WRAP_BALANCE"
+    TICKER_NOT_SUPPORTED_NOW = "TICKER_NOT_SUPPORTED_NOW"
+
     # System/Generic errors
     INVALID_TIMESTAMP = "INVALID_TIMESTAMP"
     UNKNOWN_PROCESSING_ERROR = "UNKNOWN_PROCESSING_ERROR"
@@ -59,10 +67,11 @@ class TransferType(Enum):
 
 class ValidationResult:
 
-    def __init__(self, is_valid: bool, error_code: str = None, error_message: str = None):
+    def __init__(self, is_valid: bool, error_code: str = None, error_message: str = None, additional_data: dict = None):
         self.is_valid = is_valid
         self.error_code = error_code
         self.error_message = error_message
+        self.additional_data = additional_data or {}
 
     def __bool__(self):
         return self.is_valid

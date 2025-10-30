@@ -54,6 +54,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install pipenv
     
+    - name: Install system dependencies (secp256k1 build)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libsecp256k1-dev build-essential python3-dev
+    
     - name: Cache pipenv dependencies
       uses: actions/cache@v4
       with:
@@ -208,11 +213,11 @@ jobs:
 
         echo "DATABASE_URL: $DATABASE_URL"
         echo "REDIS_URL: $REDIS_URL"
-        echo "Health check URL: http://localhost:8080/v1/indexer/brc20/health"
+        echo "Health check URL: http://localhost:8083/v1/indexer/brc20/health"
         sleep 6
         # Wait up to 6 seconds for the service to be up
         for i in {1..60}; do
-          if curl -f http://localhost:8080/v1/indexer/brc20/health; then
+          if curl -f http://localhost:8083/v1/indexer/brc20/health; then
             echo "Service is up!"
             docker stop test-indexer
             exit 0

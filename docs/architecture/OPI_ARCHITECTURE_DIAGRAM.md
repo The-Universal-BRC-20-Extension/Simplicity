@@ -6,9 +6,9 @@
 graph TD
     A[Block Ingestion] --> B[Transaction Parsing]
     B --> C{OPI Router}
-    C -->|op: "swap"| D[OPI-1 Processor]
-    C -->|op: "no_return"| E[OPI-0 Processor]
-    C -->|op: "deploy"| F[Legacy BRC20 Processor]
+    C -->|op: swap| D[OPI-1 Processor]
+    C -->|op: no_return| E[OPI-0 Processor]
+    C -->|op: deploy| F[Legacy BRC20 Processor]
     D --> G[State Validation]
     E --> G
     F --> G
