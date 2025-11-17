@@ -7,7 +7,7 @@
 
 > **The best protocol is the one we build together — block by block.**
 
-**Simplicity** is an open-source, production-ready indexer for the Universal BRC-20 Extension, featuring a powerful and modular **Operation Proposal Improvement (OPI)** framework. It provides a robust, high-performance, and verifiable implementation of the BRC-20 standards and serves as the foundation for an evolving ecosystem of advanced DeFi protocols.
+**Simplicity** is an open-source, production-ready indexer for the BRC-20 Extended, featuring a powerful and modular **Operation Proposal Improvement (OPI)** framework. It provides a robust, high-performance, and verifiable implementation of the BRC-20 standards and serves as the foundation for an evolving ecosystem of advanced DeFi protocols.
 
 This indexer is the consensus engine that powers the entire ecosystem, transforming raw on-chain data into a structured, queryable state according to a growing set of community-driven standards.
 
