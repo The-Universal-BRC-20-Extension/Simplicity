@@ -6,63 +6,88 @@ Universal-NFT is an extension of the Universal / OPT protocol that defines how n
 
 The core idea is simple:
 
-- NFTs are represented as a UTF-8 JSON payload inside an OP_RETURN output.
-- The structure mirrors the style of Universal (BRC-20), changing only the protocol identifier and the semantics of the fields.
+- NFTs are represented as UTF-8 JSON payloads inside an OP_RETURN output.
+- The structure mirrors Universal/BRC-20, changing only the protocol identifier and the semantics of the fields.
+- State reconstruction is fully deterministic and indexer-driven.
 
 ---
 
 ## 2. Payload Format
 
-Every Universal-NFT action is encoded as a JSON object stored in OP_RETURN.
+Every Universal-NFT action is encoded as a JSON object placed in an OP_RETURN output.
 
 Minimal structure:
 
 {
-  "p":   "nft",
-  "op":  "mint" or "transfer",
-  "tick":"<ticker>",
-  "meta":"<3-hex-tag>",
-  "sig": "<3-hex-tag>"
+"p": "nft",
+"op": "mint" | "transfer",
+"tick": "<ticker>",
+"meta": "<3-hex>",
+"sig": "<3-hex>"
 }
+
+yaml
+Copia codice
 
 ---
 
-### 2.1 Field Definitions
+## 2.1 Field Definitions
 
-- **p**  
-  Protocol identifier. Always `"nft"` for this extension.
+### **p**
+Protocol identifier.  
+Always:
 
-- **op**  
-  Operation type:  
-  - `"mint"` – creates a new NFT  
-  - `"transfer"` – transfers ownership of an existing NFT  
+"p": "nft"
 
-- **tick**  
-  NFT collection or identifier.  
-  Lowercase alphanumeric plus underscore (`[a-z0-9_]`).  
-  Recommended length: up to 7 characters.
+markdown
+Copia codice
 
-- **meta**  
-  3-character hex tag derived from the SHA-256 hash of the NFT image.  
-  Defined as: last 3 hex characters of the image hash.
+### **op**
+Operation type:
 
-- **sig**  
-  3-character deterministic signature derived from a server-side hash (sig_full).  
-  Defined as: last 3 hex characters of the server hash.
+- `"mint"` — creates a new NFT  
+- `"transfer"` — transfers ownership of an existing NFT  
 
-- **amt** (optional)  
-  String quantity. Defaults to `"1"`.  
-  For NFTs this value is typically constant and equal to `"1"`.
+### **tick**
+Identifier of the NFT collection.
+
+- Allowed characters: any alphanumeric (A–Z, a–z, 0–9)  
+- Recommended length: **1–7 characters**
+- Indexers SHOULD normalize tickers to **uppercase**, consistent with Universal conventions  
+  (e.g., `satoshi` → `SATOSHI`).
+
+Regex:
+
+^[A-Za-z0-9]{1,7}$
+
+markdown
+Copia codice
+
+### **meta**
+A short on-chain tag derived from the SHA-256 of the NFT image.
+
+- Defined as: **last 3 hex characters** of the image hash
+- Not intended to be globally unique (4096 possible values)
+
+### **sig**
+A second deterministic short tag.
+
+- Defined as: last 3 hex characters of a deterministic hash (`sig_full`)
+- Not a cryptographic signature and does **not** rely on any private key
+- Used together with `tick` and `meta` to identify the NFT tuple
+
+### **amt** (optional)
+Defaults to `"1"` for all NFTs.
 
 ---
 
 ## 3. JSON Encoding Rules
 
-- UTF-8 encoding only.  
-- Must be valid JSON.  
-- No trailing commas.  
-- Field order is not enforced.  
-- Extra fields should be ignored by indexers for forward compatibility.
+- UTF-8 encoding only  
+- Must be valid JSON  
+- No trailing commas  
+- Field order is not enforced  
+- Extra fields MUST be ignored for forward compatibility  
 
 ---
 
@@ -70,24 +95,54 @@ Minimal structure:
 
 A Universal-NFT payload is considered valid if:
 
-1. "p" must be exactly "nft".
-2. "op" must be either "mint" or "transfer".
-3. "tick" must match ^[A-z 0-9]{1,7}$.
-4. "meta" and "sig" must match ^[a-f 0-9]{3}$.
-5. Payload must be valid UTF-8 JSON embedded in an OP_RETURN output.
+1. `p` is exactly `"nft"`
+2. `op` is `"mint"` or `"transfer"`
+3. `tick` matches `^[A-Za-z0-9]{1,7}$`
+4. `meta` matches `^[a-f0-9]{3}$`
+5. `sig` matches `^[a-f0-9]{3}$`
+6. JSON is valid UTF-8
+7. Payload sits inside an OP_RETURN output
 
-Indexers may enrich NFTs with additional off-chain data (for example via ISPF), but the rules above define protocol-level validity.
+NFT state must be reconstructed deterministically from on-chain events.
 
 ---
 
-## 5. Relationship to Universal (BRC-20)
+## 5. Identity Model
 
-- Universal-BRC-20 uses `p = "brc-20"` and fungible token semantics.  
-- Universal-NFT uses `p = "nft"` and non-fungible semantics.  
-- Both share:
-  - JSON-in-OP_RETURN encoding  
-  - minimal on-chain footprint  
-  - deterministic parsing  
-  - indexer-driven state reconstruction  
+An NFT is uniquely identified by the tuple:
 
-This design keeps Bitcoin consensus untouched while allowing digital primitives to be defined by payloads.
+( tick_normalized , meta , sig )
+
+yaml
+Copia codice
+
+Notes:
+
+- `meta` is a compact “bucket”, not a unique identifier  
+- `sig` adds additional entropy  
+- The full SHA-256 hash in the sidecar metadata is the canonical identity source  
+- Indexers use both on-chain and sidecar data to resolve potential collisions
+
+---
+
+## 6. Ownership Model
+
+Universal-NFT adopts the same ownership rules as Universal/BRC-20:
+
+- For **mint** operations:  
+  owner = **first standard output after OP_RETURN**
+
+- For **transfer** operations:  
+  - `from` = address referenced by the **first input**  
+  - `to`   = first standard output after OP_RETURN  
+
+State is built exclusively from blockchain events with no external assertions.
+
+---
+
+## 7. Design Principles
+
+- minimal on-chain footprint  
+- deterministic analysis  
+- state reconstruction driven by indexers  
+- forward compatibility  
