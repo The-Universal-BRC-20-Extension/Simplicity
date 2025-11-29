@@ -10,8 +10,6 @@ The core idea is simple:
 - The structure mirrors Universal/BRC-20, changing only the protocol identifier and the semantics of the fields.
 - State reconstruction is fully deterministic and indexer-driven.
 
----
-
 ## 2. Payload Format
 
 Every Universal-NFT action is encoded as a JSON object placed in an OP_RETURN output.
@@ -26,11 +24,6 @@ Minimal structure:
 "sig": "<3-hex>"
 }
 
-yaml
-Copia codice
-
----
-
 ## 2.1 Field Definitions
 
 ### **p**
@@ -38,9 +31,6 @@ Protocol identifier.
 Always:
 
 "p": "nft"
-
-markdown
-Copia codice
 
 ### **op**
 Operation type:
@@ -60,9 +50,6 @@ Regex:
 
 ^[A-Za-z0-9]{1,7}$
 
-markdown
-Copia codice
-
 ### **meta**
 A short on-chain tag derived from the SHA-256 of the NFT image.
 
@@ -79,8 +66,6 @@ A second deterministic short tag.
 ### **amt** (optional)
 Defaults to `"1"` for all NFTs.
 
----
-
 ## 3. JSON Encoding Rules
 
 - UTF-8 encoding only  
@@ -88,8 +73,6 @@ Defaults to `"1"` for all NFTs.
 - No trailing commas  
 - Field order is not enforced  
 - Extra fields MUST be ignored for forward compatibility  
-
----
 
 ## 4. Validation Rules
 
@@ -105,16 +88,11 @@ A Universal-NFT payload is considered valid if:
 
 NFT state must be reconstructed deterministically from on-chain events.
 
----
-
 ## 5. Identity Model
 
 An NFT is uniquely identified by the tuple:
 
 ( tick_normalized , meta , sig )
-
-yaml
-Copia codice
 
 Notes:
 
@@ -122,8 +100,6 @@ Notes:
 - `sig` adds additional entropy  
 - The full SHA-256 hash in the sidecar metadata is the canonical identity source  
 - Indexers use both on-chain and sidecar data to resolve potential collisions
-
----
 
 ## 6. Ownership Model
 
@@ -137,8 +113,6 @@ Universal-NFT adopts the same ownership rules as Universal/BRC-20:
   - `to`   = first standard output after OP_RETURN  
 
 State is built exclusively from blockchain events with no external assertions.
-
----
 
 ## 7. Design Principles
 
