@@ -21,9 +21,6 @@ Creates a new NFT on the Bitcoin blockchain and assigns its initial owner.
 "amt": "1"
 }
 
-yaml
-Copia codice
-
 ### 1.3 Transaction Structure (Conceptual)
 
 A valid mint transaction typically includes:
@@ -52,8 +49,6 @@ When a mint is detected:
   - timestamp  
   - optional ISPF metadata (meta_full, sig_full, category, ipfs)
 
----
-
 ## 2. Transfer Operation
 
 ### 2.1 Purpose
@@ -69,9 +64,6 @@ Transfers ownership of an existing NFT from one address to another.
 "meta":"abc",
 "sig": "123"
 }
-
-markdown
-Copia codice
 
 ### 2.3 Transaction Structure (Conceptual)
 
@@ -109,8 +101,6 @@ When a transfer is detected:
    - timestamp  
 
 This global table mirrors the behaviour of `brc20_operations`.
-
----
 
 ## 3. Market Extensions (Optional)
 
