@@ -26,6 +26,7 @@ class BRC20ErrorCodes:
     EXCEEDS_MINT_LIMIT = "EXCEEDS_MINT_LIMIT"
     NO_STANDARD_OUTPUT = "NO_STANDARD_OUTPUT"
     NO_VALID_RECEIVER = "NO_VALID_RECEIVER"
+    LEGACY_TICKER = "LEGACY_TICKER"
     # Technical errors
     OP_RETURN_TOO_LARGE = "OP_RETURN_TOO_LARGE"
     MULTIPLE_OP_RETURNS = "MULTIPLE_OP_RETURNS"
@@ -51,6 +52,19 @@ class BRC20ErrorCodes:
     WRAP_CONTRACT_EXISTS = "WRAP_CONTRACT_EXISTS"
     INSUFFICIENT_WRAP_BALANCE = "INSUFFICIENT_WRAP_BALANCE"
     TICKER_NOT_SUPPORTED_NOW = "TICKER_NOT_SUPPORTED_NOW"
+    CONTRACT_NOT_FOUND = "CONTRACT_NOT_FOUND"
+
+    # Swap protocol errors
+    SWAP_MISSING_FIELDS = "SWAP_MISSING_FIELDS"
+    SWAP_INVALID_AMOUNT = "SWAP_INVALID_AMOUNT"
+    SWAP_INVALID_SLIPPAGE = "SWAP_INVALID_SLIPPAGE"
+    SWAP_INVALID_LOCK_DURATION = "SWAP_INVALID_LOCK_DURATION"
+    SWAP_LOCK_TOO_SHORT = "SWAP_LOCK_TOO_SHORT"
+    SWAP_NO_MATCHING_POSITIONS = "SWAP_NO_MATCHING_POSITIONS"
+    SWAP_ORDER_SIZE_EXCEEDS_MAX = "SWAP_ORDER_SIZE_EXCEEDS_MAX"
+    SWAP_INVALID_CALCULATION = "SWAP_INVALID_CALCULATION"
+    SWAP_INSUFFICIENT_BALANCE = "SWAP_INSUFFICIENT_BALANCE"
+    SWAP_NOT_ACTIVATED = "SWAP_NOT_ACTIVATED"
 
     # System/Generic errors
     INVALID_TIMESTAMP = "INVALID_TIMESTAMP"
@@ -101,6 +115,15 @@ class ValidationError(Exception):
     """Custom exception for validation errors"""
 
     pass
+
+
+class SSLConnectionError(Exception):
+    """Exception raised when SSL connection is lost and requires session recreation"""
+
+    def __init__(self, message: str, original_error: Exception = None):
+        self.message = message
+        self.original_error = original_error
+        super().__init__(message)
 
 
 class ProcessingResult:

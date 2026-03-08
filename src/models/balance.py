@@ -19,7 +19,12 @@ class Balance(Base):
 
     @classmethod
     def get_or_create(cls, session: Session, address: str, ticker: str) -> "Balance":
-        normalized_ticker = ticker.upper() if ticker else ticker
+        # CRITICAL: Preserve lowercase 'y' prefix for yTokens
+        # Only Curve staking can create tokens with 'y' prefix
+        if ticker and len(ticker) > 0 and ticker[0].lower() == "y":
+            normalized_ticker = "y" + ticker[1:].upper()
+        else:
+            normalized_ticker = ticker.upper() if ticker else ticker
         balance = session.query(cls).filter_by(address=address, ticker=normalized_ticker).first()
         if not balance:
             balance = cls(address=address, ticker=normalized_ticker, balance=Decimal("0"))
@@ -40,6 +45,11 @@ class Balance(Base):
     def get_total_supply(cls, session: Session, ticker: str) -> Decimal:
         from sqlalchemy import func
 
-        normalized_ticker = ticker.upper() if ticker else ticker
+        # CRITICAL: Preserve lowercase 'y' prefix for yTokens
+        # Only Curve staking can create tokens with 'y' prefix
+        if ticker and len(ticker) > 0 and ticker[0].lower() == "y":
+            normalized_ticker = "y" + ticker[1:].upper()
+        else:
+            normalized_ticker = ticker.upper() if ticker else ticker
         result = session.query(func.sum(cls.balance)).filter_by(ticker=normalized_ticker).scalar()
         return result or Decimal("0")

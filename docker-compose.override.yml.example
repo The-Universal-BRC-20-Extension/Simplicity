@@ -1,0 +1,24 @@
+# Override for "Bitcoin RPC on host" – indexer uses host network (like pipenv).
+# Postgres/Redis are published on host ports 5433 and 6380 by default to avoid
+# conflict with host 5432/6379. If 5433 or 6380 are taken, set in .env:
+#   POSTGRES_HOST_PORT=5434
+#   REDIS_HOST_PORT=6381
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
+
+  indexer:
+    network_mode: host
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-indexer}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_HOST_PORT:-5433}/${POSTGRES_DB:-brc20_indexer}
+      REDIS_URL: redis://127.0.0.1:${REDIS_HOST_PORT:-6380}/0
+      BITCOIN_RPC_URL: http://127.0.0.1:8332
+      BITCOIN_RPC_USER: ${BITCOIN_RPC_USER:-}
+      BITCOIN_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD:-}
+      BITCOIN_RPC_COOKIE_FILE: ${BITCOIN_RPC_COOKIE_FILE:-}

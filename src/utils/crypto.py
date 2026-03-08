@@ -7,12 +7,12 @@ from typing import Optional, Tuple
 import bech32m
 import secp256k1
 
-# --- CONSTANTES ---
+# --- CONSTANTS ---
 # Generator point G (compressed format)
 G_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 
 
-# --- FONCTIONS TAPROOT ---
+# --- TAPROOT FUNCTIONS ---
 def tagged_hash(tag: str, data: bytes) -> bytes:
     tag_hash = hashlib.sha256(tag.encode()).digest()
     return hashlib.sha256(tag_hash + tag_hash + data).digest()
@@ -47,9 +47,11 @@ def lift_x(x_coord_bytes: bytes) -> Optional[Tuple[secp256k1.PublicKey, int]]:
         if y % 2 != 0:
             y = p - y  # Negate to get even y
 
+        # y is even, so use 0x02 prefix
         pubkey_bytes = b"\x02" + x_coord_bytes
         pubkey = secp256k1.PublicKey(pubkey_bytes, raw=True)
 
+        # Parity is 0 (we force y even)
         return (pubkey, 0)
 
     except Exception as e:
@@ -72,23 +74,28 @@ def taproot_tweak_pubkey(internal_key: bytes, merkle_root: bytes) -> Optional[Tu
         print(f"❌ Invalid input lengths")
         return None
 
+    # Step 1: Lift the x-only internal key
     lift_result = lift_x(internal_key)
     if lift_result is None:
         print(f"❌ lift_x failed for internal_key: {internal_key.hex()}")
         return None
 
-    P, _ = lift_result
+    P, _ = lift_result  # P has even y by lift_x design
 
+    # Step 2: Compute the tweak t = tagged_hash("TapTweak", internal_key || merkle_root)
     tweak = tagged_hash("TapTweak", internal_key + merkle_root)
 
+    # Step 3: Compute Q = P + t*G
     try:
         Q = P.tweak_add(tweak)
     except Exception as e:
         print(f"❌ tweak_add failed: {e}")
         return None
 
+    # Step 4: Extract x-only pubkey and parity from Q
     Q_compressed = Q.serialize(compressed=True)
 
+    # Parity: 0 if even (0x02), 1 if odd (0x03)
     parity = 1 if Q_compressed[0] == 0x03 else 0
     output_key = Q_compressed[1:]  # x-only (32 bytes)
 
@@ -120,12 +127,15 @@ def is_valid_bitcoin_address(address: str) -> bool:
     if not address or not isinstance(address, str):
         return False
 
+    # Check for legacy addresses (P2PKH/P2SH)
     if address.startswith(("1", "3")):
         return len(address) >= 26 and len(address) <= 35
 
+    # Check for SegWit addresses (P2WPKH/P2WSH)
     if address.startswith("bc1q"):
         return len(address) >= 42 and len(address) <= 62
 
+    # Check for Taproot addresses (P2TR)
     if address.startswith("bc1p"):
         return len(address) >= 62
 
@@ -143,12 +153,16 @@ def extract_address_from_script(script_pubkey: dict) -> Optional[str]:
     if addresses:
         return addresses[0]
 
+    # For Taproot, we might need to derive the address from the script
     if script_type == "witness_v1_taproot":
+        # This would require the output key, which we don't have here
+        # Return None for now
         return None
 
     return None
 
 
+# --- HASH FUNCTIONS ---
 def hash160(data: bytes) -> bytes:
     """RIPEMD160(SHA256(data))"""
     return hashlib.new("ripemd160", hashlib.sha256(data).digest()).digest()
@@ -164,6 +178,7 @@ def sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
+# --- FONCTIONS DE CONVERSION ---
 def bytes_to_hex(data: bytes) -> str:
     """Convert bytes to hexadecimal string."""
     return data.hex()
@@ -174,6 +189,7 @@ def hex_to_bytes(hex_string: str) -> bytes:
     return bytes.fromhex(hex_string)
 
 
+# Validation helpers
 def is_valid_hex(hex_string: str) -> bool:
     """Check if a string is valid hexadecimal."""
     try:
@@ -185,7 +201,7 @@ def is_valid_hex(hex_string: str) -> bool:
 
 def is_valid_pubkey(pubkey: bytes) -> bool:
     """Check if bytes represent a valid public key."""
-    if len(pubkey) not in [33, 65]:
+    if len(pubkey) not in [33, 65]:  # Compressed or uncompressed
         return False
 
     try:

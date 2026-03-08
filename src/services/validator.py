@@ -95,13 +95,20 @@ class BRC20Validator:
         if not is_valid_amount(amount):
             return ValidationResult(False, BRC20ErrorCodes.INVALID_AMOUNT, f"Invalid mint amount: {amount}")
 
-        if deploy.limit_per_op is not None:
-            if is_amount_greater_than(amount, deploy.limit_per_op):
-                return ValidationResult(
-                    False,
-                    BRC20ErrorCodes.EXCEEDS_MINT_LIMIT,
-                    f"Mint amount {amount} exceeds limit {deploy.limit_per_op}",
-                )
+        # If limit_per_op is NULL/None, minting is NOT ALLOWED
+        if deploy.limit_per_op is None:
+            return ValidationResult(
+                False,
+                BRC20ErrorCodes.INVALID_OPERATION,
+                f"Mint operation not allowed: limit_per_op is not defined for ticker '{ticker}'. Minting requires a valid limit_per_op.",
+            )
+
+        if is_amount_greater_than(amount, deploy.limit_per_op):
+            return ValidationResult(
+                False,
+                BRC20ErrorCodes.EXCEEDS_MINT_LIMIT,
+                f"Mint amount {amount} exceeds limit {deploy.limit_per_op}",
+            )
 
         overflow_result = self.validate_mint_overflow(
             ticker, amount, deploy, intermediate_total_minted=intermediate_total_minted
@@ -230,11 +237,12 @@ class BRC20Validator:
         if intermediate_total_minted is not None and normalized_ticker in intermediate_total_minted:
             return Decimal(intermediate_total_minted[normalized_ticker])
 
+        # Include "mint_stones" in the query to count STONES mints
         db_total = (
             self.db.query(func.coalesce(func.sum(BRC20Operation.amount), 0))
             .filter(
                 BRC20Operation.ticker.ilike(normalized_ticker),
-                BRC20Operation.operation == "mint",
+                BRC20Operation.operation.in_(["mint", "mint_stones"]),
                 BRC20Operation.is_valid.is_(True),
             )
             .scalar()
@@ -280,7 +288,63 @@ class BRC20Validator:
         return self.get_output_after_op_return_address(tx_outputs)
 
     def get_balance(self, address: str, ticker: str, intermediate_balances: Optional[Dict] = None) -> Decimal:
-        normalized_ticker = ticker.upper()
+        if ticker and len(ticker) > 0 and ticker[0] == "y":  # Accept 'y' lowercase only
+            normalized_ticker = "y" + ticker[1:].upper()
+            key = (address, normalized_ticker)
+
+            # 1: Check intermediate_balances first (for mutations in same block)
+            if intermediate_balances is not None and key in intermediate_balances:
+                return intermediate_balances[key]
+
+            # 2: If pool address, calculate from active positions with rebasing
+            if address.startswith("POOL::"):
+                pool_id = address.replace("POOL::", "")
+                result = self._calculate_pool_ytoken_balance_rebasing(pool_id, normalized_ticker)
+                return result
+
+            # 3: Calculate dynamically from CurveUserInfo for Curve yTokens
+            staking_ticker = ticker[1:].upper()  # Extract staking_ticker (e.g., 'WTF' from 'yWTF')
+            from src.models.curve import CurveConstitution, CurveUserInfo
+
+            constitutions = self.db.query(CurveConstitution).filter_by(staking_ticker=staking_ticker).all()
+
+            if len(constitutions) > 0:
+                # Use the first constitution (or sort by start_block if multiple)
+                constitution = sorted(constitutions, key=lambda c: c.start_block)[0]
+                # CurveUserInfo.ticker is the reward token ticker (e.g., 'CRV'), not staking_ticker
+                user_info = (
+                    self.db.query(CurveUserInfo)
+                    .filter_by(ticker=constitution.ticker, user_address=address)  # Use reward ticker (e.g., 'CRV')
+                    .first()
+                )
+
+                if user_info:
+                    RAY = Decimal("10") ** 27
+                    scaled_balance = Decimal(str(user_info.scaled_balance))
+
+                    self.db.refresh(constitution)
+                    liquidity_index = Decimal(str(constitution.liquidity_index))
+
+                    # Formula AAVE: real_balance = (scaled_balance * liquidity_index) / RAY
+                    real_balance = (scaled_balance * liquidity_index) / RAY if liquidity_index != 0 else scaled_balance
+
+                    # Round to 8 decimals (BRC-20 precision)
+                    from decimal import ROUND_DOWN
+
+                    real_balance = real_balance.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+
+                    return real_balance
+
+            # Fallback to Balance table
+            balance_record = (
+                self.db.query(Balance)
+                .filter(Balance.address == address, Balance.ticker.ilike(normalized_ticker))
+                .first()
+            )
+            return balance_record.balance if balance_record else Decimal("0")
+        else:
+            # Normal token (including YTOKEN which is rejected as yToken)
+            normalized_ticker = ticker.upper() if ticker else ticker
         key = (address, normalized_ticker)
 
         if intermediate_balances is not None and key in intermediate_balances:
@@ -292,13 +356,238 @@ class BRC20Validator:
 
         return balance_record.balance if balance_record else Decimal("0")
 
-    def get_deploy_record(self, ticker: str, intermediate_deploys: Optional[Dict] = None) -> Optional[Deploy]:
-        normalized_ticker = ticker.upper()
+    def _calculate_pool_ytoken_balance_rebasing(self, pool_id: str, ytoken_ticker: str) -> Decimal:
+        """
+        Calculate pool balance for yToken with rebasing from active positions.
 
+        Formula: pool_balance = SUM(amount_locked × (current_liquidity_index / liquidity_index_at_lock))
+
+        This allows yTokens in pools to continue rebasing automatically.
+
+        Args:
+            pool_id: Pool ID (e.g., "LOL-yWTF")
+            ytoken_ticker: yToken ticker (e.g., "yWTF")
+
+        Returns:
+            Total pool balance for yToken (with rebasing applied)
+        """
+        import structlog
+
+        logger = structlog.get_logger(component="indexer")
+
+        from src.models.swap_position import SwapPosition, SwapPositionStatus
+        from src.models.curve import CurveConstitution
+
+        # DEBUG: Log input parameters (INFO level for visibility)
+        logger.info(
+            "_calculate_pool_ytoken_balance_rebasing called",
+            pool_id=pool_id,
+            pool_id_repr=repr(pool_id),
+            ytoken_ticker=ytoken_ticker,
+            ytoken_ticker_repr=repr(ytoken_ticker),
+            ytoken_ticker_len=len(ytoken_ticker) if ytoken_ticker else 0,
+        )
+
+        # Extract staking_ticker from yToken (e.g., "WTF" from "yWTF")
+        staking_ticker = ytoken_ticker[1:]  # Remove 'y' prefix
+
+        # Get CurveConstitution for this staking_ticker
+        constitutions = self.db.query(CurveConstitution).filter_by(staking_ticker=staking_ticker).all()
+        if not constitutions:
+            logger.debug(
+                "No CurveConstitution found",
+                staking_ticker=staking_ticker,
+                pool_id=pool_id,
+                ytoken_ticker=ytoken_ticker,
+            )
+            # Not a Curve yToken, fallback to Balance table
+            balance_record = (
+                self.db.query(Balance)
+                .filter(Balance.address == f"POOL::{pool_id}", Balance.ticker.ilike(ytoken_ticker))
+                .first()
+            )
+            result = balance_record.balance if balance_record else Decimal("0")
+            logger.debug(
+                "Fallback to Balance table",
+                pool_id=pool_id,
+                ytoken_ticker=ytoken_ticker,
+                balance_found=balance_record is not None,
+                result=result,
+            )
+            return result
+
+        # Use first constitution (or sort by start_block if multiple)
+        constitution = sorted(constitutions, key=lambda c: c.start_block)[0]
+
+        # Get current liquidity_index (already updated in flush_balances_from_state)
+        self.db.refresh(constitution)
+        current_liquidity_index = Decimal(str(constitution.liquidity_index))
+
+        logger.info(
+            "CurveConstitution found",
+            staking_ticker=staking_ticker,
+            constitution_ticker=constitution.ticker,
+            current_liquidity_index=str(current_liquidity_index),
+            pool_id=pool_id,
+        )
+
+        # DEBUG: Check all active positions in pool first (for comparison)
+        all_active_positions = (
+            self.db.query(SwapPosition)
+            .filter(SwapPosition.pool_id == pool_id, SwapPosition.status == SwapPositionStatus.active)
+            .all()
+        )
+
+        logger.info(
+            "All active positions in pool",
+            pool_id=pool_id,
+            total_active_positions=len(all_active_positions),
+            position_details=[
+                {
+                    "id": p.id,
+                    "src_ticker": p.src_ticker,
+                    "src_ticker_repr": repr(p.src_ticker),
+                    "dst_ticker": p.dst_ticker,
+                    "amount_locked": str(p.amount_locked),
+                }
+                for p in all_active_positions
+            ],
+        )
+
+        # Get all active positions with src_ticker=yToken in this pool
+        positions = (
+            self.db.query(SwapPosition)
+            .filter(
+                SwapPosition.pool_id == pool_id,
+                SwapPosition.src_ticker == ytoken_ticker,
+                SwapPosition.status == SwapPositionStatus.active,
+            )
+            .all()
+        )
+
+        logger.info(
+            "Positions matching yToken filter",
+            pool_id=pool_id,
+            ytoken_ticker=ytoken_ticker,
+            ytoken_ticker_repr=repr(ytoken_ticker),
+            positions_found=len(positions),
+            position_ids=[p.id for p in positions],
+            position_src_tickers=[p.src_ticker for p in positions],
+            position_src_tickers_repr=[repr(p.src_ticker) for p in positions],
+        )
+
+        total_pool_balance = Decimal("0")
+
+        for position in positions:
+            amount_locked = Decimal(str(position.amount_locked))
+            rebasing_ratio = None
+
+            # If position has liquidity_index_at_lock, apply rebasing
+            if position.liquidity_index_at_lock:
+                liquidity_index_at_lock = Decimal(str(position.liquidity_index_at_lock))
+
+                # Calculate rebasing ratio
+                if liquidity_index_at_lock > 0:
+                    rebasing_ratio = current_liquidity_index / liquidity_index_at_lock
+                    # Apply rebasing to amount_locked
+                    real_locked_balance = amount_locked * rebasing_ratio
+                else:
+                    # Fallback if liquidity_index_at_lock is 0 (shouldn't happen)
+                    real_locked_balance = amount_locked
+                    logger.warning(
+                        "Position has liquidity_index_at_lock = 0",
+                        position_id=position.id,
+                        pool_id=pool_id,
+                    )
+            else:
+                real_locked_balance = amount_locked
+                logger.debug(
+                    "Position without liquidity_index_at_lock (old position)",
+                    position_id=position.id,
+                    pool_id=pool_id,
+                    amount_locked=str(amount_locked),
+                )
+
+            # Round to 8 decimals (BRC-20 precision)
+            from decimal import ROUND_DOWN
+
+            real_locked_balance = real_locked_balance.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+
+            logger.debug(
+                "Processing position for pool balance",
+                position_id=position.id,
+                amount_locked=str(amount_locked),
+                liquidity_index_at_lock=(
+                    str(position.liquidity_index_at_lock) if position.liquidity_index_at_lock else None
+                ),
+                rebasing_ratio=str(rebasing_ratio) if rebasing_ratio is not None else None,
+                real_locked_balance=str(real_locked_balance),
+            )
+
+            total_pool_balance += real_locked_balance
+
+        logger.info(
+            "_calculate_pool_ytoken_balance_rebasing result",
+            pool_id=pool_id,
+            ytoken_ticker=ytoken_ticker,
+            total_pool_balance=str(total_pool_balance),
+            positions_processed=len(positions),
+        )
+
+        return total_pool_balance
+
+    def get_deploy_record(self, ticker: str, intermediate_deploys: Optional[Dict] = None) -> Optional[Deploy]:
+        """
+        Retrieves deployment record. Creates a VIRTUAL DEPLOY for valid yTokens.
+
+        This enables yTokens (rebasing derivatives) to be used in standard swap operations
+        (swap.init, swap.exe) without requiring a physical Deploy record in the database.
+        """
+
+        if ticker and len(ticker) > 0 and ticker[0].lower() == "y":
+            normalized_ticker = "y" + ticker[1:].upper()  # "yWTF" → "yWTF", "YWTF" → "yWTF"
+        else:
+            normalized_ticker = ticker.upper()
+
+        # 1. Check Cache
         if intermediate_deploys is not None and normalized_ticker in intermediate_deploys:
             return intermediate_deploys[normalized_ticker]
 
-        return self.db.query(Deploy).filter(Deploy.ticker.ilike(normalized_ticker)).first()
+        # 2. Check DB (Standard Token)
+        # Use case-insensitive search for standard tokens
+        deploy = self.db.query(Deploy).filter(Deploy.ticker.ilike(normalized_ticker)).first()
+        if deploy:
+            return deploy
+
+        # 3. yToken Virtualization Logic
+        if len(normalized_ticker) > 1 and normalized_ticker.startswith("y"):
+            staking_ticker = normalized_ticker[1:]  # e.g., 'yWTF' -> 'WTF'
+
+            from src.models.curve import CurveConstitution
+            from datetime import datetime, timezone
+
+            constitution = self.db.query(CurveConstitution).filter_by(staking_ticker=staking_ticker).first()
+
+            if constitution:
+                # Create Virtual Deploy Object (Ephemeral)
+                virtual_deploy = Deploy(
+                    ticker=normalized_ticker,  # "yWTF" (case preserved)
+                    max_supply=Decimal("1e27"),  # Effectively Infinite
+                    remaining_supply=Decimal("1e27"),
+                    limit_per_op=None,
+                    deploy_txid=f"VIRTUAL_YTOKEN_{staking_ticker}",  # Marker ID
+                    deploy_height=constitution.start_block,
+                    deploy_timestamp=datetime.now(timezone.utc),
+                    deployer_address=constitution.genesis_address,
+                )
+
+                # Cache it
+                if intermediate_deploys is not None:
+                    intermediate_deploys[normalized_ticker] = virtual_deploy
+
+                return virtual_deploy
+
+        return None
 
     def validate_complete_operation(
         self,
@@ -350,6 +639,8 @@ class BRC20Validator:
             )
 
         elif op_type == "burn":
+            # Standard burn validation (if needed for non-Wrap tokens)
+            # Note: Wrap burns are handled separately in processor
             return ValidationResult(True)
 
         else:
@@ -366,13 +657,16 @@ class BRC20Validator:
         contract_address: str,
         crypto_data: dict = None,
     ) -> ValidationResult:
+        """Validate Taproot contract creation (8-step cryptographic validation, atomic control_blocks)."""
         try:
+            # Step 0: Validate control blocks
             if len(control_blocks) != 2:
                 return ValidationResult(False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Expected 2 control blocks")
 
             control_block_multisig = control_blocks[0]
             control_block_csv = control_blocks[1]
 
+            # 0a. Validate internal key of each control block
             if len(control_block_multisig) < 33 or len(control_block_csv) < 33:
                 return ValidationResult(False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Control blocks too short")
 
@@ -387,26 +681,21 @@ class BRC20Validator:
                     False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Internal pubkey mismatch in control blocks"
                 )
 
+            # Step 1: Rebuild script templates
+            # Use validated internal key
             multisig_script = TapscriptTemplates.create_multisig_script(internal_pubkey_from_commit)
             csv_script = TapscriptTemplates.create_csv_script()
 
-            print(f"  🔍 Debug Scripts:")
-            print(f"    Multisig script: {multisig_script.hex()}")
-            print(f"    CSV script: {csv_script.hex()}")
-            print(f"    Expected CSV script: {crypto_data['leafs']['csv']['script']}")
-
+            # Step 2: Compute leaf hashes
             multisig_leaf_hash = compute_tapleaf_hash(multisig_script)
             csv_leaf_hash = compute_tapleaf_hash(csv_script)
 
+            # Step 3: Rebuild Merkle root
+            # Use original order (multisig, csv) as in data
             reconstructed_merkle_root = compute_merkle_root([multisig_leaf_hash, csv_leaf_hash])
 
+            # Step 4: Validate Merkle paths
             merkle_path_for_multisig = control_block_multisig[33:]
-            print(f"  🔍 Debug Merkle validation:")
-            print(f"    Multisig leaf hash: {multisig_leaf_hash.hex()}")
-            print(f"    CSV leaf hash: {csv_leaf_hash.hex()}")
-            print(f"    Merkle path for multisig: {merkle_path_for_multisig.hex()}")
-            print(f"    Merkle path for CSV: {control_block_csv[33:].hex()}")
-            print(f"    Reconstructed merkle root: {reconstructed_merkle_root.hex()}")
 
             if merkle_path_for_multisig != csv_leaf_hash:
                 return ValidationResult(
@@ -419,16 +708,20 @@ class BRC20Validator:
                     False, BRC20ErrorCodes.INVALID_CONTROL_BLOCK, "Merkle path for CSV is incorrect"
                 )
 
+            # Step 5: Compute tweak
             tweak = compute_tweak(internal_pubkey_from_commit, reconstructed_merkle_root)
 
+            # Step 6: Derive output key
             result = derive_output_key(internal_pubkey_from_commit, tweak)
             if not result:
                 return ValidationResult(False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, "Failed to derive output key")
 
             output_key, parity = result
 
+            # Step 7: Derive Bech32m address
             recalculated_address = taproot_output_key_to_address(output_key, parity=parity)
 
+            # Step 8: Final check
             if recalculated_address != contract_address:
                 return ValidationResult(
                     False,
@@ -436,6 +729,7 @@ class BRC20Validator:
                     f"Address mismatch: expected {recalculated_address}, got {contract_address}",
                 )
 
+            # Success!
             return ValidationResult(
                 True,
                 additional_data={

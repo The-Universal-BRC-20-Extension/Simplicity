@@ -15,11 +15,12 @@ from .bitcoin_rpc import BitcoinRPCService
 from .processor import BRC20Processor
 from .reorg_handler import ReorgHandler
 from .error_handler import ErrorHandler
-from src.utils.exceptions import IndexerError, TransferType
+from src.utils.exceptions import IndexerError, TransferType, SSLConnectionError
 from src.opi.contracts import IntermediateState
 from src.opi.registry import OPIRegistry
 
 # Note: SwapPosition imports removed as position handling is now done via triggers
+from decimal import Decimal
 
 
 @dataclass
@@ -56,6 +57,7 @@ class IndexerService:
     ):
         self.db = db_session
         self.rpc = bitcoin_rpc
+        self.bitcoin_rpc = bitcoin_rpc  # Alias for existing code
 
         self.processor = BRC20Processor(db_session, bitcoin_rpc)
         self.reorg_handler = ReorgHandler(db_session, bitcoin_rpc)
@@ -94,6 +96,117 @@ class IndexerService:
                 self.logger.error(f"Failed to register OPI processor {op_name}", error=str(e), class_path=class_path)
                 if settings.STOP_ON_OPI_ERROR:
                     raise
+
+    def _is_session_invalid_error(self, exception: Exception) -> bool:
+        """
+        Check if exception indicates an invalid DB session.
+
+        Returns True if the exception indicates that the DB session is invalid
+        and needs to be recreated (e.g., SSL connection closed, transaction rolled back).
+
+        Returns False for normal validation errors (e.g., insufficient balance, no recipient).
+
+        Args:
+            exception: Exception to check
+
+        Returns:
+            True if session is invalid, False otherwise
+        """
+        error_str = str(exception)
+        error_type = type(exception).__name__
+
+        # Check exception type
+        from sqlalchemy.exc import OperationalError, DisconnectionError
+
+        if isinstance(exception, (OperationalError, DisconnectionError)):
+            return True
+
+        # Check error message patterns
+        invalidating_patterns = [
+            "Can't reconnect until invalid transaction is rolled back",
+            "SSL connection has been closed",
+            "connection was closed",
+            "server closed the connection",
+            "connection timeout",
+            "OperationalError",
+            "DisconnectionError",
+            "connection was aborted",
+            "connection reset by peer",
+        ]
+
+        return any(pattern in error_str for pattern in invalidating_patterns)
+
+    def _recreate_session_with_cleanup(
+        self, intermediate_state: IntermediateState, persistence_buffer: List[Any]
+    ) -> None:
+        """
+        Recreate DB session and detach all ORM objects from old session.
+
+        This method implements professional SQLAlchemy session management:
+        1. Expires all objects in the old session (detach from session)
+        2. Rolls back the old session (required before close)
+        3. Closes the old session
+        4. Creates a new session
+        5. Recreates processor and reorg_handler with new session
+        6. Clears persistence_buffer (objects will be recreated on retry)
+        7. Clears intermediate_state.deploys (will be reloaded from DB on retry)
+
+        Args:
+            intermediate_state: IntermediateState object containing deploys to clear
+            persistence_buffer: List of ORM objects to clear
+        """
+        old_session = self.db
+
+        # 1. Expire all objects in old session to detach them
+        try:
+            old_session.expire_all()
+            self.logger.debug("Expired all objects in old session")
+        except Exception as expire_error:
+            # If expire_all fails, session is likely already invalid
+            # Continue with rollback and close
+            self.logger.warning("Failed to expire objects in old session", error=str(expire_error))
+
+        # 2. Rollback and close old session
+        try:
+            old_session.rollback()
+            self.logger.debug("Rolled back old session")
+        except Exception as rollback_error:
+            # If rollback fails, session is likely already invalid
+            # Continue with close
+            self.logger.warning("Failed to rollback old session", error=str(rollback_error))
+
+        try:
+            old_session.close()
+            self.logger.debug("Closed old session")
+        except Exception as close_error:
+            # If close fails, log but continue
+            self.logger.warning("Failed to close old session", error=str(close_error))
+
+        # 3. Create new session
+        from src.database.connection import SessionLocal
+
+        new_session = SessionLocal()
+        self.db = new_session
+
+        # 4. Recreate processor and reorg_handler with new session
+        self.processor = BRC20Processor(self.db, self.rpc)
+        self.reorg_handler = ReorgHandler(self.db, self.rpc)
+
+        # 5. Clear persistence_buffer (objects attached to old session)
+        # Objects will be recreated during retry
+        cleared_objects_count = len(persistence_buffer)
+        persistence_buffer.clear()
+
+        # 6. Clear deploys in intermediate_state (objects attached to old session)
+        # Deploys will be reloaded from DB on retry if needed
+        cleared_deploys_count = len(intermediate_state.deploys)
+        intermediate_state.deploys.clear()
+
+        self.logger.info(
+            "DB session recreated with cleanup",
+            cleared_objects_count=cleared_objects_count,
+            cleared_deploys_count=cleared_deploys_count,
+        )
 
     def start_indexing(self, start_height: Optional[int] = None, max_blocks: Optional[int] = None) -> None:
         """Start indexation from specified height."""
@@ -150,6 +263,14 @@ class IndexerService:
                             height=current_height,
                             sync_percentage=status.sync_percentage,
                             processing_rate=status.processing_rate,
+                            operations_found=result.brc20_operations_found,
+                            operations_valid=result.brc20_operations_valid,
+                        )
+                    elif current_height % 10 == 0:
+                        # Log every 10 blocks to track progress
+                        self.logger.info(
+                            "Block processed",
+                            height=current_height,
                             operations_found=result.brc20_operations_found,
                             operations_valid=result.brc20_operations_valid,
                         )
@@ -329,6 +450,44 @@ class IndexerService:
                             current_height += 1
 
                         except Exception as e:
+                            error_str = str(e)
+
+                            # Check if this is a session invalidation error
+                            if self._is_session_invalid_error(e):
+                                # Session invalidated - recreate with cleanup
+                                self.logger.warning(
+                                    "Session invalidated during block processing - recreating session",
+                                    height=current_height,
+                                    error=error_str[:200],
+                                )
+
+                                # Create empty intermediate_state and persistence_buffer for cleanup
+                                dummy_intermediate_state = IntermediateState()
+                                dummy_persistence_buffer = []
+
+                                # Recreate session with cleanup
+                                try:
+                                    self._recreate_session_with_cleanup(
+                                        dummy_intermediate_state, dummy_persistence_buffer
+                                    )
+
+                                    self.logger.info(
+                                        "DB session recreated after session error - retrying block",
+                                        height=current_height,
+                                    )
+                                    # Retry the block with new session
+                                    continue
+                                except Exception as recreate_error:
+                                    self.logger.error("Failed to recreate DB session", error=str(recreate_error))
+                                    if settings.STOP_ON_ERROR:
+                                        raise
+                                    self.logger.warning(
+                                        "Skipping problematic block after failed session recreation",
+                                        height=current_height,
+                                    )
+                                    current_height += 1
+                                    continue
+
                             self.error_handler.handle_database_error(e, {"height": current_height})
 
                             if self.rpc._is_connection_error(e):
@@ -704,8 +863,7 @@ class IndexerService:
             height=block["height"],
         )
 
-        # NOTE: Swap position expiration is now handled by PostgreSQL triggers on processed_blocks
-        # See migration ffe8d27490fd_add_swap_position_expiration_triggers.py for details
+        # NOTE: Swap position expiration is handled by PostgreSQL triggers on processed_blocks
 
         brc20_candidates = self._ultra_fast_brc20_pre_scan(transactions)
 
@@ -752,42 +910,274 @@ class IndexerService:
         )
 
         for tx_data in prioritized_list:
-            try:
-                result, objects_to_persist, state_commands = self.processor.process_transaction(
-                    tx_data,
-                    block_height=block["height"],
-                    tx_index=tx_data["original_tx_index"],
-                    block_timestamp=block_timestamp,
-                    block_hash=block["hash"],
-                    intermediate_state=intermediate_state,
-                )
+            txid = tx_data.get("txid", "unknown")
+            max_retries_per_tx = 3
+            retry_count = 0
+            transaction_success = False
 
-                if objects_to_persist:
-                    persistence_buffer.extend(objects_to_persist)
+            while retry_count < max_retries_per_tx and not transaction_success:
+                try:
+                    result, objects_to_persist, state_commands = self.processor.process_transaction(
+                        tx_data,
+                        block_height=block["height"],
+                        tx_index=tx_data["original_tx_index"],
+                        block_timestamp=block_timestamp,
+                        block_hash=block["hash"],
+                        intermediate_state=intermediate_state,
+                    )
 
-                result.original_tx_index = tx_data["original_tx_index"]
-                processed_results.append(result)
-            except Exception as e:
-                txid = tx_data.get("txid", "unknown")
-                self.logger.error("Transaction processing failed", txid=txid, error=str(e))
-                error_result = type(
-                    "ProcessingResult",
-                    (),
-                    {
-                        "operation_found": False,
-                        "is_valid": False,
-                        "error_message": str(e),
-                        "txid": txid,
-                        "original_tx_index": tx_data.get("original_tx_index", 9999),
-                    },
-                )()
-                processed_results.append(error_result)
+                    if objects_to_persist:
+                        persistence_buffer.extend(objects_to_persist)
+
+                    result.original_tx_index = tx_data["original_tx_index"]
+                    processed_results.append(result)
+                    transaction_success = True
+
+                except Exception as e:
+                    error_str = str(e)
+
+                    if self._is_session_invalid_error(e) and retry_count < max_retries_per_tx - 1:
+
+                        self.logger.warning(
+                            "Session invalidated during transaction processing - recreating session and retrying",
+                            txid=txid,
+                            error=error_str[:200],
+                            retry_count=retry_count + 1,
+                            max_retries=max_retries_per_tx,
+                        )
+
+                        self._recreate_session_with_cleanup(intermediate_state, persistence_buffer)
+
+                        retry_count += 1
+                        continue
+                    else:
+                        if self._is_session_invalid_error(e):
+                            # Max retries reached for session error
+                            self.logger.error(
+                                "Transaction failed after max retries due to session error",
+                                txid=txid,
+                                error=error_str[:200],
+                                retry_count=retry_count,
+                            )
+                        else:
+                            self.logger.error("Transaction processing failed", txid=txid, error=error_str[:200])
+
+                        error_result = type(
+                            "ProcessingResult",
+                            (),
+                            {
+                                "operation_found": False,
+                                "is_valid": False,
+                                "error_message": error_str,
+                                "txid": txid,
+                                "original_tx_index": tx_data.get("original_tx_index", 9999),
+                            },
+                        )()
+                        processed_results.append(error_result)
+                        transaction_success = True  # Mark as processed (even if failed)
 
         try:
-            self.processor.flush_balances_from_state(intermediate_state)
+            max_flush_retries = 2
+            flush_retry_count = 0
+            flush_success = False
 
-            for obj in persistence_buffer:
-                self.db.add(obj)
+            while flush_retry_count < max_flush_retries and not flush_success:
+                try:
+                    self.processor.flush_balances_from_state(intermediate_state)
+                    flush_success = True
+                except SSLConnectionError as ssl_error:
+                    if flush_retry_count < max_flush_retries - 1:
+                        self.logger.warning(
+                            "SSL connection error during balance flush - recreating session and retrying flush",
+                            height=block.get("height"),
+                            error=str(ssl_error)[:200],
+                            retry_count=flush_retry_count + 1,
+                            max_retries=max_flush_retries,
+                        )
+
+                        self._recreate_session_with_cleanup(intermediate_state, persistence_buffer)
+
+                        flush_retry_count += 1
+                        continue
+                    else:
+                        self.logger.error(
+                            "SSL error persists after max retries in flush_balances",
+                            height=block.get("height"),
+                            error=str(ssl_error)[:200],
+                            retry_count=flush_retry_count,
+                        )
+                        raise  # Re-raise to stop block processing
+                except Exception as other_error:
+                    if self._is_session_invalid_error(other_error):
+                        # Session invalidated - recreate and retry
+                        if flush_retry_count < max_flush_retries - 1:
+                            self.logger.warning(
+                                "Session invalidated during balance flush - recreating session and retrying",
+                                height=block.get("height"),
+                                error=str(other_error)[:200],
+                                retry_count=flush_retry_count + 1,
+                                max_retries=max_flush_retries,
+                            )
+
+                            self._recreate_session_with_cleanup(intermediate_state, persistence_buffer)
+
+                            flush_retry_count += 1
+                            continue
+                        else:
+                            self.logger.error(
+                                "Session error persists after max retries in flush_balances",
+                                height=block.get("height"),
+                                error=str(other_error)[:200],
+                                retry_count=flush_retry_count,
+                            )
+                            raise  # Re-raise to stop block processing
+                    else:
+                        self.logger.error(
+                            "Unexpected error during balance flush",
+                            height=block.get("height"),
+                            error=str(other_error)[:200],
+                        )
+                        raise
+
+            max_add_flush_retries = 2
+            add_flush_retry_count = 0
+            add_flush_success = False
+
+            while add_flush_retry_count < max_add_flush_retries and not add_flush_success:
+                try:
+                    for obj in persistence_buffer:
+                        self.db.add(obj)
+
+                    # Flush all balance changes to database before integrity check
+                    self.db.flush()
+                    self.logger.debug("Balance changes flushed", block_height=block["height"])
+                    add_flush_success = True
+                except Exception as add_flush_error:
+                    # Check if this is a session invalidation error
+                    if (
+                        self._is_session_invalid_error(add_flush_error)
+                        and add_flush_retry_count < max_add_flush_retries - 1
+                    ):
+                        self.logger.warning(
+                            "Session invalidated during add/flush - recreating session and retrying",
+                            height=block.get("height"),
+                            error=str(add_flush_error)[:200],
+                            retry_count=add_flush_retry_count + 1,
+                            max_retries=max_add_flush_retries,
+                        )
+
+                        self._recreate_session_with_cleanup(intermediate_state, persistence_buffer)
+
+                        add_flush_retry_count += 1
+                        continue
+                    else:
+                        if self._is_session_invalid_error(add_flush_error):
+                            self.logger.error(
+                                "Session error persists after max retries in add/flush",
+                                height=block.get("height"),
+                                error=str(add_flush_error)[:200],
+                                retry_count=add_flush_retry_count,
+                            )
+                        else:
+                            self.logger.error(
+                                "Unexpected error during add/flush",
+                                height=block.get("height"),
+                                error=str(add_flush_error)[:200],
+                            )
+                        raise  # Re-raise to stop block processing
+
+            # Notarize pool operations before SQL triggers
+            try:
+                from src.services.pool_integrity_checker import PoolIntegrityChecker
+
+                integrity_checker = PoolIntegrityChecker(self.db)
+                integrity_checker.logger = self.logger
+
+                block_height = block.get("height") if isinstance(block, dict) else None
+                block_hash = block.get("hash") if isinstance(block, dict) else None
+
+                if block_height is None:
+                    self.logger.warning(
+                        "Cannot perform pool integrity check - invalid block format",
+                        block_type=type(block).__name__,
+                    )
+                else:
+                    self.logger.debug("Starting pool integrity check", block_height=block_height)
+                    notarization_result = integrity_checker.notarize_pool_operations(
+                        block_height=block_height, block_hash=block_hash
+                    )
+                    self.logger.debug("Pool integrity check completed", block_height=block_height)
+
+                    # Validate result structure before accessing
+                    if not isinstance(notarization_result, dict):
+                        self.logger.error(
+                            "Pool integrity check returned invalid result type",
+                            block_height=block_height,
+                            result_type=type(notarization_result).__name__,
+                            result_value=str(notarization_result)[:200],
+                        )
+                    else:
+                        integrity_checker.log_notarization(notarization_result)
+
+                        summary = notarization_result.get("summary")
+                        if isinstance(summary, dict):
+                            if summary.get("status") == "ERROR":
+                                self.logger.critical(
+                                    "Pool integrity check detected errors - investigation required",
+                                    block_height=block_height,
+                                    errors=notarization_result.get("errors", []),
+                                    warnings=notarization_result.get("warnings", []),
+                                )
+                        elif isinstance(summary, str):
+                            self.logger.debug(
+                                "Pool integrity check completed",
+                                block_height=block_height,
+                                summary=summary,
+                            )
+                        else:
+                            self.logger.warning(
+                                "Pool integrity check returned invalid summary type",
+                                block_height=block_height,
+                                summary_type=type(summary).__name__,
+                            )
+            except Exception as e:
+                block_height = (
+                    block.get("height")
+                    if isinstance(block, dict)
+                    else (block if isinstance(block, (int, str)) else None)
+                )
+                self.logger.error(
+                    "Failed to perform pool integrity check",
+                    block_height=block_height,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
+
+            # Process LP rewards for expired swap positions
+            # This happens after balances are flushed and objects are persisted
+            # The SQL trigger handles principal refund, this service handles LP rewards
+            try:
+                self.logger.debug("Starting LP rewards processing", block_height=block["height"])
+                from src.services.lp_reward_distributor import LPRewardDistributor
+
+                reward_distributor = LPRewardDistributor(self.db)
+                reward_distributor.logger = self.logger
+                processed_positions = reward_distributor.process_expired_positions(block["height"])
+                self.logger.debug("LP rewards processing completed", block_height=block["height"])
+                if processed_positions:
+                    self.logger.info(
+                        "Distributed LP rewards for expired positions",
+                        block_height=block["height"],
+                        positions_count=len(processed_positions),
+                    )
+            except Exception as e:
+                # Log error but don't fail block processing
+                self.logger.error(
+                    "Failed to distribute LP rewards for expired positions",
+                    block_height=block["height"],
+                    error=str(e),
+                )
 
             self.logger.info(
                 "Block processing completed successfully",
@@ -796,6 +1186,55 @@ class IndexerService:
                 operations_logged=len(persistence_buffer),
             )
 
+        except IntegrityError as integrity_error:
+            error_str = str(integrity_error)
+            # Handle duplicate BRC20Operation (can happen if block was partially processed after SSL error)
+            if "UniqueViolation" in error_str and "brc20_operations_txid_vout_index_key" in error_str:
+                self.logger.warning(
+                    "Duplicate BRC20Operation detected, likely from partial block processing after SSL error",
+                    block_height=block["height"],
+                    error=error_str[:200],
+                )
+
+                try:
+                    self.db.rollback()
+                except Exception:
+                    try:
+                        self.db.close()
+                    except Exception:
+                        pass
+
+                from src.models.transaction import BRC20Operation
+
+                existing_ops = self.db.query(BRC20Operation).filter_by(block_height=block["height"]).count()
+
+                if existing_ops > 0:
+                    self.logger.info(
+                        "Block operations already exist, flushing balances only",
+                        block_height=block["height"],
+                        existing_operations=existing_ops,
+                    )
+                    try:
+                        self.processor.flush_balances_from_state(intermediate_state)
+                        self.db.commit()
+                        self.logger.info(
+                            "Block processed successfully (operations already existed)", block_height=block["height"]
+                        )
+                        return
+                    except Exception as flush_error:
+                        self.logger.error(
+                            "Failed to flush balances for duplicate block",
+                            block_height=block["height"],
+                            error=str(flush_error),
+                        )
+                        raise IndexerError(
+                            f"Failed to flush balances for duplicate block {block['height']}: {flush_error}"
+                        )
+                else:
+                    raise IndexerError(f"Unexpected duplicate key error at block {block['height']}: {integrity_error}")
+            else:
+                # Other IntegrityError - re-raise
+                raise
         except Exception as e:
             self.logger.critical(
                 "Block processing failed - Rolling back transaction",
@@ -803,11 +1242,32 @@ class IndexerService:
                 error=str(e),
                 balance_updates=len(intermediate_state.balances),
             )
-            self.db.rollback()
+            # Always rollback before closing to avoid "Can't reconnect until invalid transaction is rolled back"
+            try:
+                self.db.rollback()
+                self.logger.debug("Transaction rolled back successfully", block_height=block["height"])
+            except Exception as rollback_error:
+                # If rollback fails, the transaction is likely already invalid
+                # Log but continue to close the session
+                self.logger.warning(
+                    "Rollback failed - transaction may be invalid (will close session)",
+                    block_height=block["height"],
+                    rollback_error=str(rollback_error),
+                    original_error=str(e),
+                )
+            try:
+                self.db.close()
+                self.logger.debug("Session closed after error", block_height=block["height"])
+            except Exception as close_error:
+                # If close also fails, log but don't block - session will be recreated
+                self.logger.warning(
+                    "Error closing session after rollback", block_height=block["height"], error=str(close_error)
+                )
             raise IndexerError(f"Balance flush failed at block {block['height']}: {e}")
         else:
+            self.logger.debug("Committing block to database", block_height=block["height"])
             self.db.commit()
-            self.logger.debug("Block committed to database", block_height=block["height"])
+            self.logger.info("Block committed to database", block_height=block["height"])
 
         all_results = []
         processed_indices = {r.original_tx_index for r in processed_results}
@@ -1014,9 +1474,18 @@ class IndexerService:
 
     def _is_brc20_candidate_ultra_fast(self, hex_script: str) -> bool:
         try:
+            # Check for STONES mint first (format: "6a5d" - OP_RETURN followed directly by "5d")
+            # The "5d" appears directly after "6a" in the hex script (no push byte)
+            if len(hex_script) >= 4 and hex_script.lower().startswith("6a"):
+                # Check if "5d" appears right after "6a" (positions 2-3)
+                if hex_script[2:4].lower() == "5d":
+                    return True
+
+            # For standard BRC-20, need minimum length
             if len(hex_script) < 20:
                 return False
 
+            # Check for standard BRC-20 pattern
             brc20_hex_pattern = "6272632d3230"
 
             return brc20_hex_pattern in hex_script.lower()

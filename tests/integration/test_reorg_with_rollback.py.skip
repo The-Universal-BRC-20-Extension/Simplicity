@@ -1,0 +1,273 @@
+"""
+Integration tests for ReorgHandler with RollbackService.
+
+Tests cover:
+- Complete reorg handling with balance rollback
+- Reorg detection and common ancestor finding
+- Balance restoration after reorg
+- Continuous indexing after reorg
+"""
+
+import pytest
+from decimal import Decimal
+from unittest.mock import Mock, patch
+from sqlalchemy.orm import Session
+
+from src.services.reorg_handler import ReorgHandler
+from src.services.rollback_service import RollbackService
+from src.models.transaction import BRC20Operation
+from src.models.balance import Balance
+from src.models.deploy import Deploy
+from src.models.block import ProcessedBlock
+
+
+class TestReorgWithRollback:
+    """Test ReorgHandler with RollbackService integration"""
+
+    @pytest.fixture
+    def mock_db_session(self):
+        """Mock database session"""
+        session = Mock(spec=Session)
+        return session
+
+    @pytest.fixture
+    def mock_bitcoin_rpc(self):
+        """Mock Bitcoin RPC service"""
+        rpc = Mock()
+        return rpc
+
+    @pytest.fixture
+    def reorg_handler(self, mock_db_session, mock_bitcoin_rpc):
+        """Create ReorgHandler instance"""
+        return ReorgHandler(mock_db_session, mock_bitcoin_rpc)
+
+    def test_reorg_handler_uses_rollback_service(self, reorg_handler):
+        """Test that ReorgHandler has RollbackService instance"""
+        assert hasattr(reorg_handler, "rollback_service")
+        assert isinstance(reorg_handler.rollback_service, RollbackService)
+
+    def test_handle_reorg_with_balance_rollback(self, reorg_handler, mock_db_session, mock_bitcoin_rpc):
+        """Test complete reorg handling with balance rollback"""
+        # Setup: Create mock operations that will be rolled back
+        mock_transfer = Mock(spec=BRC20Operation)
+        mock_transfer.operation = "transfer"
+        mock_transfer.ticker = "TEST"
+        mock_transfer.amount = Decimal("100")
+        mock_transfer.from_address = "sender"
+        mock_transfer.to_address = "receiver"
+        mock_transfer.block_height = 1001
+        mock_transfer.tx_index = 1
+        mock_transfer.id = 1
+        mock_transfer.txid = "tx1"
+        mock_transfer.is_valid = True
+
+        # Mock find_common_ancestor to return height 999
+        with patch.object(reorg_handler, "_find_common_ancestor", return_value=999):
+            # Mock operations query
+            operations_query = Mock()
+            operations_query.all.return_value = [mock_transfer]
+
+            # Mock balance
+            mock_balance_sender = Mock(spec=Balance)
+            mock_balance_sender.balance = Decimal("0")
+
+            mock_balance_receiver = Mock(spec=Balance)
+            mock_balance_receiver.balance = Decimal("100")
+
+            # Setup query side effects
+            balance_call_count = 0
+
+            def balance_query_side_effect(*args, **kwargs):
+                nonlocal balance_call_count
+                balance_call_count += 1
+                if balance_call_count == 1:
+                    return Mock(first=Mock(return_value=mock_balance_sender))
+                else:
+                    return Mock(first=Mock(return_value=mock_balance_receiver))
+
+            # Mock all queries
+            def query_side_effect(model):
+                if model == BRC20Operation:
+                    # First call: get operations to rollback
+                    # Second call: count/delete operations
+                    if hasattr(query_side_effect, "brc20_call_count"):
+                        query_side_effect.brc20_call_count += 1
+                        if query_side_effect.brc20_call_count == 1:
+                            return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+                        else:
+                            return Mock(
+                                filter=Mock(return_value=Mock(count=Mock(return_value=1), delete=Mock(return_value=1)))
+                            )
+                    else:
+                        query_side_effect.brc20_call_count = 1
+                        return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+                elif model == Balance:
+                    return Mock(filter_by=balance_query_side_effect)
+                elif model == ProcessedBlock:
+                    return Mock(filter=Mock(return_value=Mock(count=Mock(return_value=2), delete=Mock(return_value=2))))
+                elif model == Deploy:
+                    return Mock(filter=Mock(return_value=Mock(first=Mock(return_value=None))))
+                return Mock()
+
+            mock_db_session.query.side_effect = query_side_effect
+
+            # Execute reorg
+            resume_height = reorg_handler.handle_reorg(reorg_height=1001)
+
+            # Verify resume height
+            assert resume_height == 1000  # common_ancestor + 1
+
+            # Verify balances were updated
+            # Sender should get +100 (reverse the send)
+            assert mock_balance_sender.balance == Decimal("100")
+            # Receiver should get -100 (reverse the receive)
+            assert mock_balance_receiver.balance == Decimal("0")
+
+            # Verify commit was called
+            mock_db_session.commit.assert_called()
+
+    def test_handle_reorg_with_deploy_deletion(self, reorg_handler, mock_db_session, mock_bitcoin_rpc):
+        """Test reorg with deploy deletion"""
+        # Setup: Create mock deploy operation
+        mock_deploy_op = Mock(spec=BRC20Operation)
+        mock_deploy_op.operation = "deploy"
+        mock_deploy_op.ticker = "NEWTOKEN"
+        mock_deploy_op.amount = None
+        mock_deploy_op.from_address = "deployer"
+        mock_deploy_op.to_address = None
+        mock_deploy_op.block_height = 1001
+        mock_deploy_op.tx_index = 1
+        mock_deploy_op.id = 1
+        mock_deploy_op.txid = "tx1"
+        mock_deploy_op.is_valid = True
+
+        # Mock deploy record
+        mock_deploy = Mock(spec=Deploy)
+
+        # Mock find_common_ancestor
+        with patch.object(reorg_handler, "_find_common_ancestor", return_value=999):
+            # Mock operations query
+            operations_query = Mock()
+            operations_query.all.return_value = [mock_deploy_op]
+
+            # Setup query side effects
+            def query_side_effect(model):
+                if model == BRC20Operation:
+                    if hasattr(query_side_effect, "call_count"):
+                        query_side_effect.call_count += 1
+                        if query_side_effect.call_count == 1:
+                            return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+                        else:
+                            return Mock(
+                                filter=Mock(return_value=Mock(count=Mock(return_value=1), delete=Mock(return_value=1)))
+                            )
+                    else:
+                        query_side_effect.call_count = 1
+                        return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+                elif model == Deploy:
+                    return Mock(filter=Mock(return_value=Mock(first=Mock(return_value=mock_deploy))))
+                elif model == ProcessedBlock:
+                    return Mock(filter=Mock(return_value=Mock(count=Mock(return_value=2), delete=Mock(return_value=2))))
+                return Mock()
+
+            mock_db_session.query.side_effect = query_side_effect
+
+            # Execute reorg
+            resume_height = reorg_handler.handle_reorg(reorg_height=1001)
+
+            # Verify deploy was deleted
+            mock_db_session.delete.assert_called_once_with(mock_deploy)
+
+            # Verify commit
+            mock_db_session.commit.assert_called()
+
+    def test_handle_reorg_rollback_on_error(self, reorg_handler, mock_db_session, mock_bitcoin_rpc):
+        """Test that database is rolled back on error"""
+        # Mock find_common_ancestor to raise error
+        with patch.object(reorg_handler, "_find_common_ancestor", side_effect=Exception("RPC Error")):
+            # Execute reorg and expect error
+            with pytest.raises(Exception):
+                reorg_handler.handle_reorg(reorg_height=1001)
+
+            # Verify rollback was NOT called (no commit happened)
+            # The exception is propagated before commit
+
+    def test_rollback_to_height_negative_balance_error(self, reorg_handler, mock_db_session):
+        """Test that rollback fails if balance would become negative"""
+        # Create mock operation that would cause negative balance
+        mock_transfer = Mock(spec=BRC20Operation)
+        mock_transfer.operation = "transfer"
+        mock_transfer.ticker = "TEST"
+        mock_transfer.amount = Decimal("100")
+        mock_transfer.from_address = "sender"
+        mock_transfer.to_address = "receiver"
+        mock_transfer.block_height = 1001
+        mock_transfer.tx_index = 1
+        mock_transfer.id = 1
+        mock_transfer.txid = "tx1"
+        mock_transfer.is_valid = True
+
+        # Mock balance that doesn't have enough to rollback
+        mock_balance = Mock(spec=Balance)
+        mock_balance.balance = Decimal("0")  # Receiver has 0, can't subtract 100
+
+        # Mock operations query
+        operations_query = Mock()
+        operations_query.all.return_value = [mock_transfer]
+
+        # Setup query to return insufficient balance for receiver
+        balance_call_count = 0
+
+        def balance_query(*args, **kwargs):
+            nonlocal balance_call_count
+            balance_call_count += 1
+            if balance_call_count == 1:
+                # Sender balance (will be increased)
+                return Mock(first=Mock(return_value=Mock(spec=Balance, balance=Decimal("0"))))
+            else:
+                # Receiver balance (will be decreased - causes error)
+                return Mock(first=Mock(return_value=mock_balance))
+
+        def query_side_effect(model):
+            if model == BRC20Operation:
+                return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+            elif model == Balance:
+                return Mock(filter_by=balance_query)
+            return Mock()
+
+        mock_db_session.query.side_effect = query_side_effect
+
+        # Execute rollback and expect error (wrapped in IndexerError by ReorgHandler)
+        from src.utils.exceptions import IndexerError
+
+        with pytest.raises(IndexerError, match="Rollback failed"):
+            reorg_handler._rollback_to_height(target_height=999)
+
+        # Verify rollback was called
+        mock_db_session.rollback.assert_called()
+
+    def test_continuous_indexing_scenario(self, reorg_handler, mock_db_session, mock_bitcoin_rpc):
+        """Test reorg handling in continuous indexing scenario"""
+        # Simulate: indexer at height 1000, detects reorg, rolls back to 995, continues
+
+        # Mock find_common_ancestor
+        with patch.object(reorg_handler, "_find_common_ancestor", return_value=995):
+            # Mock empty operations (all blocks were empty)
+            operations_query = Mock()
+            operations_query.all.return_value = []
+
+            mock_db_session.query.return_value.filter.return_value.order_by.return_value = operations_query
+            mock_db_session.query.return_value.filter.return_value.count.return_value = 0
+            mock_db_session.query.return_value.filter.return_value.delete.return_value = 0
+
+            # Execute reorg
+            resume_height = reorg_handler.handle_reorg(reorg_height=1000)
+
+            # Should resume from 996
+            assert resume_height == 996
+
+            # Commit should be called
+            mock_db_session.commit.assert_called()
+
+            # In continuous mode, indexer would now process from height 996
+            # with the new chain

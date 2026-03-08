@@ -7,10 +7,13 @@ contract's structure and has been audited for cryptographic correctness.
 """
 
 import varint
-from typing import List
+from typing import Optional, List, Tuple
 
+# Relies on low-level, audited cryptographic primitives
 from . import crypto
 from ..config import settings
+
+# --- Self-Contained CScriptNum Implementation ---
 
 
 def decode_script_num(data: bytes) -> int:
@@ -21,9 +24,12 @@ def decode_script_num(data: bytes) -> int:
     if not data:
         return 0
 
+    # Simple little-endian decoding for now
     result = int.from_bytes(data, "little")
 
+    # Handle the sign bit on the last byte
     if data[-1] & 0x80:
+        # Negative number - clear the sign bit and negate
         result = result & ~(0x80 << ((len(data) - 1) * 8))
         result = -result
 
@@ -41,15 +47,25 @@ def encode_script_num(value: int) -> bytes:
     is_negative = value < 0
     abs_value = abs(value)
 
+    # Convert to little-endian bytes
     result = abs_value.to_bytes((abs_value.bit_length() + 7) // 8, "little")
 
+    # Handle the sign bit on the last byte
     if is_negative:
         if result[-1] & 0x80:
             result += b"\x80"
         else:
             result = result[:-1] + bytes([result[-1] | 0x80])
+    else:
+        # For positive values, if MSB >= 0x80, add padding 00
+        # to avoid Bitcoin Script interpreting it as negative
+        if result[-1] & 0x80:
+            result += b"\x00"
 
     return result
+
+
+# --- High-Level Cryptographic Functions ---
 
 
 def compute_tweak(internal_pubkey: bytes, merkle_root: bytes) -> bytes:
@@ -104,11 +120,12 @@ def compute_merkle_root(leaf_hashes: List[bytes]) -> bytes:
         next_level = []
         for i in range(0, len(level), 2):
             if i + 1 < len(level):
+                # Only sort the pair being combined.
                 node1, node2 = sorted([level[i], level[i + 1]])
                 parent_hash = crypto.tagged_hash("TapBranch", node1 + node2)
                 next_level.append(parent_hash)
             else:
-                next_level.append(level[i])
+                next_level.append(level[i])  # Promote the odd node.
         level = next_level
 
     return level[0]
@@ -123,14 +140,50 @@ class TapscriptTemplates:
     This is the canonical source for the contract's structure.
     """
 
-    OPERATOR_PUBKEY = bytes.fromhex(settings.OPERATOR_PUBKEY)
-    EMERGENCY_RECOVER_TIME_BLOCKS = 105120
+    OPERATOR_PUBKEY = bytes.fromhex(settings.PLATFORM_PUBKEY)
+    EMERGENCY_RECOVER_TIME_BLOCKS = 65534  # Maximum valid BIP 68 value (65535 = 0xFFFF can cause issues)
     NON_SPENDABLE_INTERNAL_KEY = bytes.fromhex("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee96802ac071")
 
     @staticmethod
     def _encode_csv_value(value: int) -> bytes:
-        """Encodes an integer into the minimal byte format for a script push (CScriptNum)."""
-        return encode_script_num(value)
+        """
+        Encodes an integer into the minimal byte format for a script push (CScriptNum).
+        Uses minimal encoding (BIP 62) as required by Bitcoin Core.
+
+        Rules:
+        - For 0: OP_0 (0x00)
+        - For 1-16: OP_1 to OP_16 (0x51-0x60)
+        - For > 16: Length directly + little-endian data (NOT OP_PUSHDATA1 for <= 75 bytes)
+        - If MSB >= 0x80: Add padding 00 to avoid negative number
+
+        BIP 68 CRITICAL: Values > 65534 make the script UNUSABLE (funds locked forever)
+        """
+        if value == 0:
+            return b"\x00"  # OP_0
+        if 1 <= value <= 16:
+            return bytes([0x50 + value])  # OP_1 to OP_16
+
+        # Encode as CScriptNum (little-endian with sign bit handling)
+        script_num_bytes = encode_script_num(value)
+        length = len(script_num_bytes)
+
+        # BIP 68 CRITICAL: Validate limit (65534 is maximum valid, 65535 can cause issues)
+        if value > 65534:
+            raise ValueError(
+                f"CSV blocks ({value}) exceeds BIP 68 limit (65534 maximum valid). "
+                "Script would be unusable (funds locked forever)."
+            )
+
+        # Minimal encoding (BIP 62): Use direct length for <= 75 bytes
+        if length <= 75:
+            return bytes([length]) + script_num_bytes
+        # For > 75 bytes, use OP_PUSHDATA1
+        elif length <= 255:
+            return b"\x4c" + bytes([length]) + script_num_bytes  # OP_PUSHDATA1
+        elif length <= 65535:
+            return b"\x4d" + length.to_bytes(2, "little") + script_num_bytes  # OP_PUSHDATA2
+        else:
+            return b"\x4e" + length.to_bytes(4, "little") + script_num_bytes  # OP_PUSHDATA4
 
     @classmethod
     def create_multisig_script(cls, user_pubkey_xonly: bytes) -> bytes:
@@ -158,14 +211,28 @@ class TapscriptTemplates:
         """
         Creates the CSV timelock (Liquidation Path) script.
         Format: <csv_blocks> OP_CHECKSEQUENCEVERIFY OP_DROP <operator_key> OP_CHECKSIG
+
+        BIP 68 CRITICAL: csv_blocks MUST be <= 65534 (maximum valid)
+        Note: 65535 = 0xFFFF can cause problems, so maximum = 65534
+        Values > 65534 make the script UNUSABLE (funds locked forever)
         """
+        if csv_blocks > 65534:
+            raise ValueError(
+                f"CSV blocks ({csv_blocks}) exceeds BIP 68 limit (65534 maximum valid). "
+                "Script would be unusable (funds locked forever)."
+            )
+
+        if csv_blocks < 1:
+            raise ValueError("CSV blocks must be >= 1")
+
         csv_bytes_with_push_op = cls._encode_csv_value(csv_blocks)
 
         return (
             csv_bytes_with_push_op
             + b"\xb2"  # OP_CHECKSEQUENCEVERIFY
             + b"\x75"  # OP_DROP
-            + cls.OPERATOR_PUBKEY  # Operator key (no PUSH prefix)
+            + b"\x20"  # OP_PUSHBYTES_32
+            + cls.OPERATOR_PUBKEY  # Operator key (32 bytes x-only)
             + b"\xac"  # OP_CHECKSIG
         )
 
@@ -174,9 +241,19 @@ class TapscriptTemplates:
         """
         Creates the long timelock (Emergency/Sovereign Path) script for user recovery.
         Format: <recover_time> OP_CHECKSEQUENCEVERIFY OP_DROP <user_key> OP_CHECKSIG
+
+        BIP 68 CRITICAL: recover_time MUST be exactly 65534 (maximum valid)
+        The recovery path MUST use the maximum valid value.
         """
         if len(user_pubkey_xonly) != 32:
             raise ValueError("User public key must be a 32-byte x-only key.")
+
+        # BIP 68 CRITICAL: Recovery path MUST be exactly 65534 (maximum valid)
+        if cls.EMERGENCY_RECOVER_TIME_BLOCKS != 65534:
+            raise ValueError(
+                f"EMERGENCY_RECOVER_TIME_BLOCKS must be exactly 65534 (BIP 68 maximum valid). "
+                f"Got: {cls.EMERGENCY_RECOVER_TIME_BLOCKS}"
+            )
 
         recover_time_bytes_with_push_op = cls._encode_csv_value(cls.EMERGENCY_RECOVER_TIME_BLOCKS)
 
@@ -184,6 +261,7 @@ class TapscriptTemplates:
             recover_time_bytes_with_push_op
             + b"\xb2"  # OP_CHECKSEQUENCEVERIFY
             + b"\x75"  # OP_DROP
-            + user_pubkey_xonly  # User key (no PUSH prefix)
+            + b"\x20"  # OP_PUSHBYTES_32
+            + user_pubkey_xonly  # User key (32 bytes x-only)
             + b"\xac"  # OP_CHECKSIG
         )

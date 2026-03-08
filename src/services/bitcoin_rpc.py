@@ -1,17 +1,193 @@
 """
 Bitcoin RPC service for blockchain interaction.
+
+Authentication: BITCOIN_RPC_COOKIE_FILE, or BITCOIN_RPC_USER + BITCOIN_RPC_PASSWORD (Basic),
+or BITCOIN_RPC_API_KEY + BITCOIN_RPC_AUTH_HEADER (external providers: QuickNode, Alchemy).
+Cookie file takes precedence when set and valid.
 """
 
+import base64
+import json
+import os
+import socket
+import ssl
 import time
 import random
-from typing import Dict, Any, List
-from bitcoinrpc.authproxy import AuthServiceProxy, JSONRPCException
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from typing import Dict, Any, List, Optional, Tuple
+from bitcoinrpc.authproxy import JSONRPCException
 from src.config import settings
 import structlog
 from functools import wraps
 from enum import Enum
 
 logger = structlog.get_logger()
+
+# JSON-RPC id counter for RPC client
+_rpc_id_counter = 0
+
+
+def _host_header_from_url(rpc_url: str) -> str:
+    """
+    Build Host header including port. When connecting to host.docker.internal,
+    use the resolved IP so Host matches the connection peer (avoids 403 from
+    Bitcoin Core when Host doesn't match the client IP).
+    """
+    parsed = urlparse(rpc_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port
+    if port is None:
+        port = 8332 if parsed.scheme != "https" else 443
+    # Resolve host.docker.internal to the actual IP so Host header matches peer
+    if host in ("host.docker.internal", "host-gateway"):
+        try:
+            host = socket.gethostbyname("host.docker.internal")
+        except (socket.gaierror, OSError):
+            pass  # keep host as-is if resolution fails
+    if port != (443 if parsed.scheme == "https" else 80):
+        return f"{host}:{port}"
+    return host
+
+
+def _build_auth_headers(
+    rpc_url: str,
+    rpc_user: str,
+    rpc_password: str,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Build request headers: Host, optional Basic auth, optional API-key/token header, and fixed headers."""
+    host = _host_header_from_url(rpc_url)
+    headers: Dict[str, str] = {
+        "Host": host,
+        "User-Agent": "curl/7.88.1",
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+    }
+    u = (rpc_user or "").strip()
+    p = (rpc_password or "").strip()
+    if u or p:
+        raw = f"{u}:{p}".encode("utf-8")
+        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+class _RequestsRPCClient:
+    """
+    Bitcoin RPC client using stdlib urllib only. Sends minimal HTTP like curl
+    (no requests library) to avoid 403 from strict Bitcoin Core / proxies.
+    Supports Basic auth (user/password), optional API-key/token header (external providers).
+    """
+
+    def __init__(
+        self,
+        rpc_url: str,
+        rpc_user: str,
+        rpc_password: str,
+        timeout: int = 30,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ):
+        self.rpc_url = rpc_url.rstrip("/") or "/"
+        self.rpc_user = rpc_user or ""
+        self.rpc_password = rpc_password or ""
+        self.timeout = timeout
+        self._host_header = _host_header_from_url(rpc_url)
+        self._parsed = urlparse(self.rpc_url)
+        self._headers = _build_auth_headers(rpc_url, self.rpc_user, self.rpc_password, extra_headers)
+
+    def _call(self, method: str, *args: Any) -> Any:
+        global _rpc_id_counter
+        _rpc_id_counter += 1
+        payload = {
+            "jsonrpc": "1.0",
+            "method": method,
+            "params": list(args),
+            "id": _rpc_id_counter,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(
+            self.rpc_url,
+            data=body,
+            method="POST",
+            headers=self._headers,
+        )
+        try:
+            ctx = ssl.create_default_context() if self._parsed.scheme == "https" else None
+            with urlopen(req, timeout=self.timeout, context=ctx) as resp:
+                if resp.status != 200:
+                    raise ConnectionError(
+                        f"Bitcoin RPC HTTP {resp.status}: {resp.reason}. "
+                        f"non-JSON HTTP response with '{resp.status} {resp.reason}' from server"
+                    )
+                data = json.loads(resp.read().decode("utf-8"))
+        except HTTPError as e:
+            raise ConnectionError(
+                f"Bitcoin RPC HTTP {e.code}: {e.reason}. "
+                f"non-JSON HTTP response with '{e.code} {e.reason}' from server"
+            ) from e
+        except URLError as e:
+            raise ConnectionError(f"Bitcoin RPC request failed: {e.reason}") from e
+        if data.get("error") is not None:
+            raise JSONRPCException(data["error"])
+        return data.get("result")
+
+    def getblockcount(self) -> int:
+        return self._call("getblockcount")
+
+    def getbestblockhash(self) -> str:
+        return self._call("getbestblockhash")
+
+    def getblock(self, block_hash: str, verbosity: int = 2) -> Dict[str, Any]:
+        return self._call("getblock", block_hash, verbosity)
+
+    def getblockhash(self, height: int) -> str:
+        return self._call("getblockhash", height)
+
+    def getrawtransaction(self, txid: str, verbose: bool = True) -> Dict[str, Any]:
+        return self._call("getrawtransaction", txid, verbose)
+
+    def decoderawtransaction(self, hex_tx: str) -> Dict[str, Any]:
+        return self._call("decoderawtransaction", hex_tx)
+
+    def getblockchaininfo(self) -> Dict[str, Any]:
+        return self._call("getblockchaininfo")
+
+    def getrawmempool(self) -> List[str]:
+        return self._call("getrawmempool")
+
+    def getnetworkinfo(self) -> Dict[str, Any]:
+        return self._call("getnetworkinfo")
+
+
+def _read_cookie_file(path: str) -> Tuple[str, str]:
+    """
+    Read Bitcoin Core cookie file (single line username:password).
+    Splits on first colon so password may contain colons.
+
+    Returns:
+        (username, password)
+
+    Raises:
+        ValueError: if file missing, unreadable, or invalid format
+    """
+    expanded = os.path.expanduser(path)
+    if not os.path.isfile(expanded):
+        raise ValueError(f"Bitcoin RPC cookie file not found or not a file: {path}")
+    try:
+        with open(expanded, "r", encoding="utf-8") as f:
+            line = f.readline()
+    except OSError as e:
+        raise ValueError(f"Bitcoin RPC cookie file could not be read: {path}") from e
+    line = line.strip()
+    if ":" not in line:
+        raise ValueError("Bitcoin RPC cookie file invalid format: expected single line username:password")
+    user, _, password = line.partition(":")
+    if not user.strip() or not password:
+        raise ValueError("Bitcoin RPC cookie file invalid: username and password must be non-empty")
+    return user.strip(), password
 
 
 class ConnectionState(Enum):
@@ -87,44 +263,68 @@ class BitcoinRPCService:
     """
     Enhanced Bitcoin RPC service with robust error handling, automatic retry,
     and connection management to prevent "Request-sent" errors.
+
+    Auth: either rpc_cookie_file (Bitcoin Core .cookie path) or rpc_user + rpc_password.
+    Cookie file takes precedence when set and valid.
     """
 
-    def __init__(self, rpc_url: str = None, rpc_user: str = None, rpc_password: str = None):
+    def __init__(
+        self,
+        rpc_url: Optional[str] = None,
+        rpc_user: Optional[str] = None,
+        rpc_password: Optional[str] = None,
+        rpc_cookie_file: Optional[str] = None,
+    ):
         """
-        Initialize Bitcoin RPC service with enhanced error handling.
+        Initialize Bitcoin RPC service. Use either cookie file or user/password for auth.
 
         Args:
             rpc_url: RPC URL (default from settings)
-            rpc_user: RPC username (default from settings)
-            rpc_password: RPC password (default from settings)
+            rpc_user: RPC username (default from settings, used when no cookie file)
+            rpc_password: RPC password (default from settings, used when no cookie file)
+            rpc_cookie_file: Path to Bitcoin Core .cookie file (overrides user/password when set)
         """
         self.rpc_url = rpc_url or settings.BITCOIN_RPC_URL
-        self.rpc_user = rpc_user or settings.BITCOIN_RPC_USER
-        self.rpc_password = rpc_password or settings.BITCOIN_RPC_PASSWORD
-
         if not self.rpc_url:
             raise ValueError("Bitcoin RPC URL is required")
-        if not self.rpc_user:
-            raise ValueError("Bitcoin RPC username is required")
-        if not self.rpc_password:
-            raise ValueError("Bitcoin RPC password is required")
 
-        if self.rpc_password == "your_rpc_password_here":  # nosec B105
-            raise ValueError(
-                "Bitcoin RPC password is set to placeholder value. "
-                "For rpcauth setup, use the actual password (not the hash). "
-                "Example: if your bitcoin.conf has 'rpcauth=bitcoinrpc:hash$salt', "
-                "use the original password that generated this hash."
-            )
+        cookie_path = rpc_cookie_file or getattr(settings, "BITCOIN_RPC_COOKIE_FILE", None)
+        api_key = getattr(settings, "BITCOIN_RPC_API_KEY", None) or ""
+        api_key = api_key.strip() if isinstance(api_key, str) else ""
 
-        if self.rpc_url.startswith("http"):
-            if "@" in self.rpc_url:
-                self.connection_url = self.rpc_url
+        if cookie_path and cookie_path.strip():
+            self.rpc_user, self.rpc_password = _read_cookie_file(cookie_path.strip())
+            self._auth_mode = "cookie_file"
+            self._extra_headers = None
+        elif api_key:
+            self.rpc_user = ""
+            self.rpc_password = ""
+            self._auth_mode = "api_key"
+            auth_header = (getattr(settings, "BITCOIN_RPC_AUTH_HEADER", None) or "Bearer").strip().lower()
+            if auth_header == "bearer":
+                self._extra_headers = {"Authorization": f"Bearer {api_key}"}
+            elif auth_header == "x-token":
+                self._extra_headers = {"x-token": api_key}
+            elif auth_header == "api-key":
+                self._extra_headers = {"api-key": api_key}
             else:
-                protocol, rest = self.rpc_url.split("://", 1)
-                self.connection_url = f"{protocol}://{self.rpc_user}:{self.rpc_password}@{rest}"
+                self._extra_headers = {"Authorization": f"Bearer {api_key}"}
         else:
-            self.connection_url = f"http://{self.rpc_user}:{self.rpc_password}@{self.rpc_url}"
+            self.rpc_user = rpc_user or settings.BITCOIN_RPC_USER
+            self.rpc_password = rpc_password or settings.BITCOIN_RPC_PASSWORD
+            self._extra_headers = None
+            if not self.rpc_user:
+                raise ValueError("Bitcoin RPC username is required")
+            if not self.rpc_password:
+                raise ValueError("Bitcoin RPC password is required")
+            if self.rpc_password == "your_rpc_password_here":  # nosec B105
+                raise ValueError(
+                    "Bitcoin RPC password is set to placeholder value. "
+                    "For rpcauth setup, use the actual password (not the hash). "
+                    "Example: if your bitcoin.conf has 'rpcauth=bitcoinrpc:hash$salt', "
+                    "use the original password that generated this hash."
+                )
+            self._auth_mode = "user_password"
 
         self._rpc = None
         self._connection_state = ConnectionState.HEALTHY
@@ -133,12 +333,17 @@ class BitcoinRPCService:
         self._consecutive_failures = 0
         self._max_consecutive_failures = 5
 
-        logger.info(
-            "Bitcoin RPC service initialized",
-            rpc_url=self.rpc_url,
-            rpc_user=self.rpc_user,
-            connection_state=self._connection_state.value,
-        )
+        log_extra: Dict[str, Any] = {
+            "rpc_url": self.rpc_url,
+            "connection_state": self._connection_state.value,
+        }
+        if self._auth_mode == "cookie_file":
+            log_extra["auth_mode"] = "cookie_file"
+        elif self._auth_mode == "api_key":
+            log_extra["auth_mode"] = "api_key"
+        else:
+            log_extra["rpc_user"] = self.rpc_user
+        logger.info("Bitcoin RPC service initialized", **log_extra)
 
     def _is_connection_error(self, error: Exception) -> bool:
         """Check if an error is connection-related and should trigger reconnection."""
@@ -208,15 +413,10 @@ class BitcoinRPCService:
             self._last_health_check = current_time
             return False
 
-    def _get_rpc_connection(self) -> AuthServiceProxy:
+    def _get_rpc_connection(self) -> _RequestsRPCClient:
         """
         Get or create RPC connection with health checking.
-
-        Returns:
-            AuthServiceProxy: RPC connection
-
-        Raises:
-            ConnectionError: If connection fails
+        Uses stdlib urllib RPC client with minimal headers (avoids 403 from strict nodes).
         """
         if self._connection_state == ConnectionState.FAILED:
             self._force_reconnect()
@@ -224,7 +424,13 @@ class BitcoinRPCService:
         if self._rpc is None:
             try:
                 logger.info("Creating new RPC connection")
-                self._rpc = AuthServiceProxy(self.connection_url)
+                self._rpc = _RequestsRPCClient(
+                    self.rpc_url,
+                    self.rpc_user,
+                    self.rpc_password,
+                    timeout=30,
+                    extra_headers=getattr(self, "_extra_headers", None),
+                )
                 self._connection_state = ConnectionState.HEALTHY
 
                 self._rpc.getblockcount()
@@ -401,7 +607,17 @@ class BitcoinRPCService:
         """
         try:
             rpc = self._get_rpc_connection()
-            return rpc.decoderawtransaction(hex_tx)
+            result = rpc.decoderawtransaction(hex_tx)
+
+            # Ensure response is a dict (RPC may return unexpected type)
+            if not isinstance(result, dict):
+                raise JSONRPCException(
+                    f"Invalid response type from decoderawtransaction: "
+                    f"expected dict, got {type(result).__name__}. "
+                    f"Response: {str(result)[:200]}"
+                )
+
+            return result
         except JSONRPCException as e:
             raise JSONRPCException(f"Failed to decode transaction: {e}")
 
@@ -530,19 +746,32 @@ class BitcoinRPCService:
             self._consecutive_failures = 0
             self._last_health_check = 0
 
-            logger.info(
-                "RPC connection reset completed",
-                rpc_url=self.rpc_url,
-                rpc_user=self.rpc_user,
-            )
+            log_extra = {"rpc_url": self.rpc_url}
+            if self._auth_mode == "cookie_file":
+                log_extra["auth_mode"] = "cookie_file"
+            else:
+                log_extra["rpc_user"] = self.rpc_user
+            logger.info("RPC connection reset completed", **log_extra)
 
             test_result = self.test_connection()
             if not test_result:
-                logger.error("RPC connection test failed after reset")
-                raise ConnectionError("RPC connection test failed after reset")
-
+                # Force one more attempt to capture and log the real error
+                self._rpc = None
+                try:
+                    self._get_rpc_connection()
+                except Exception as e:
+                    logger.error(
+                        "RPC connection test failed after reset",
+                        error=str(e),
+                        rpc_url=self.rpc_url,
+                        exc_info=True,
+                    )
+                    raise ConnectionError(f"RPC connection test failed after reset: {e}") from e
+                # Should not reach here if above raised
             logger.info("RPC connection reset and test successful")
 
+        except ConnectionError:
+            raise
         except Exception as e:
             logger.error("Error during RPC connection reset", error=str(e))
             raise e

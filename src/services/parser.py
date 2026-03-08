@@ -4,6 +4,7 @@ BRC-20 OP_RETURN parsing and validation service.
 
 import json
 from typing import Dict, Any, Optional, Tuple, List
+from decimal import Decimal
 from src.utils.exceptions import BRC20ErrorCodes, ValidationResult
 from src.utils.bitcoin import is_op_return_script, extract_op_return_data
 
@@ -12,7 +13,9 @@ class BRC20Parser:
     """Parse and validate BRC-20 OP_RETURN payloads"""
 
     def __init__(self):
-        self.max_op_return_size = 80
+        # Increased limit to support Curve operations with extended JSON
+        # Standard BRC-20: ~40-60 bytes, Curve deploy: ~120 bytes
+        self.max_op_return_size = 2000
 
     def extract_op_return_data(self, tx: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
         if not isinstance(tx, dict) or "vout" not in tx:
@@ -32,18 +35,37 @@ class BRC20Parser:
             if not isinstance(script_pub_key, dict):
                 continue
 
-            if script_pub_key.get("type") == "nulldata":
-                hex_script = script_pub_key.get("hex", "")
+            hex_script = script_pub_key.get("hex", "")
+            is_nulldata_type = script_pub_key.get("type") == "nulldata"
+            is_op_return_by_hex = hex_script and is_op_return_script(hex_script)
+
+            # Check OP_RETURN: either by type (nulldata) or by hex pattern (starts with 0x6a)
+            if is_nulldata_type or is_op_return_by_hex:
                 if is_op_return_script(hex_script):
-                    if self._is_likely_brc20_fast(hex_script) or self._is_likely_wmint_fast(hex_script):
+                    # Check for STONES mint first (format: "6a5d" - "5d" directly after "6a")
+                    if len(hex_script) >= 4 and hex_script.lower().startswith("6a") and hex_script[2:4].lower() == "5d":
                         op_return_outputs.append((hex_script, i))
+                    else:
+                        # Extract OP_RETURN data to check for other formats
+                        op_return_data = extract_op_return_data(hex_script)
+                        # Check for STONES mint in extracted data
+                        if op_return_data and self._is_likely_stones_mint(op_return_data):
+                            op_return_outputs.append((hex_script, i))
+                        elif self._is_likely_brc20_fast(hex_script) or self._is_likely_wmint_fast(hex_script):
+                            op_return_outputs.append((hex_script, i))
 
         if len(op_return_outputs) != 1:
             return None, None
 
         hex_script, vout_index = op_return_outputs[0]
 
-        op_return_data = extract_op_return_data(hex_script)
+        # Handle STONES mint format "6a5d" (no push byte, "5d" directly after "6a")
+        if len(hex_script) >= 4 and hex_script.lower().startswith("6a") and hex_script[2:4].lower() == "5d":
+            # For "6a5d" format, return "5d" as the data
+            op_return_data = "5d"
+        else:
+            op_return_data = extract_op_return_data(hex_script)
+
         if op_return_data is None:
             return None, None
 
@@ -117,6 +139,10 @@ class BRC20Parser:
             if self._is_likely_wmint_fast(hex_data):
                 return self.parse_wmint_operation(hex_data)
 
+            # Check for STONES mint (extracted data starts with "5d")
+            if self._is_likely_stones_mint(hex_data):
+                return self.parse_stones_mint(hex_data)
+
             sanitized_hex = hex_data.replace("\x00", "")
             try:
                 data_bytes = bytes.fromhex(sanitized_hex)
@@ -131,6 +157,9 @@ class BRC20Parser:
                     }
 
             except ValueError:
+                # Before returning INVALID_JSON, check for STONES mint
+                if self._is_likely_stones_mint(hex_data):
+                    return self.parse_stones_mint(hex_data)
                 return {
                     "success": False,
                     "data": None,
@@ -138,6 +167,9 @@ class BRC20Parser:
                     "error_message": "Hex decoding failed: not valid hex data",
                 }
             except UnicodeDecodeError:
+                # Before returning INVALID_JSON, check for STONES mint
+                if self._is_likely_stones_mint(hex_data):
+                    return self.parse_stones_mint(hex_data)
                 return {
                     "success": False,
                     "data": None,
@@ -147,6 +179,9 @@ class BRC20Parser:
             try:
                 operation = json.loads(json_str)
             except json.JSONDecodeError:
+                # Before returning INVALID_JSON, check for STONES mint
+                if self._is_likely_stones_mint(hex_data):
+                    return self.parse_stones_mint(hex_data)
                 return {
                     "success": False,
                     "data": None,
@@ -280,37 +315,70 @@ class BRC20Parser:
 
     def _validate_swap_fields(self, operation: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
         """
-        Validate swap operation payload. For now we support `init` flavor only.
-        Required fields:
+        Validate swap operation payload. Supports both `init` and `exe` flavors.
+
+        For swap.init:
           - init: "SRC,DST" tickers string
           - amt: string amount to lock (decimal)
           - lock: string blocks (integer >= 1)
+
+        For swap.exe:
+          - exe: "SRC,DST" tickers string
+          - amt: string amount to swap (decimal)
+          - slip: string slippage tolerance (decimal, 0-100)
         """
         init_field = operation.get("init")
+        exe_field = operation.get("exe")
         amt_field = operation.get("amt")
-        lock_field = operation.get("lock")
 
-        if init_field is None:
-            return False, BRC20ErrorCodes.INVALID_OPERATION, "Missing 'init' for swap operation"
+        # Must have either init or exe, but not both
+        if init_field is None and exe_field is None:
+            return False, BRC20ErrorCodes.INVALID_OPERATION, "Missing 'init' or 'exe' for swap operation"
 
-        if not isinstance(init_field, str) or "," not in init_field:
-            return False, BRC20ErrorCodes.INVALID_TICKER, "Field 'init' must be 'SRC,DST'"
+        if init_field is not None and exe_field is not None:
+            return False, BRC20ErrorCodes.INVALID_OPERATION, "Cannot have both 'init' and 'exe' in swap operation"
 
+        # Validate amt is present and valid
         if amt_field is None or not isinstance(amt_field, str) or amt_field.strip() == "":
             return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'amt'"
 
-        if lock_field is None or not isinstance(lock_field, str):
-            return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'lock'"
-        try:
-            lock_int = int(lock_field)
-            if lock_int < 1:
-                return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be >= 1"
-        except Exception:
-            return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be integer string"
+        # Validate init path
+        if init_field is not None:
+            lock_field = operation.get("lock")
+            if not isinstance(init_field, str) or "," not in init_field:
+                return False, BRC20ErrorCodes.INVALID_TICKER, "Field 'init' must be 'SRC,DST'"
 
-        src, dst = [t.strip() for t in init_field.split(",", 1)]
-        if not self.validate_ticker_format(src) or not self.validate_ticker_format(dst):
-            return False, BRC20ErrorCodes.INVALID_TICKER, "Invalid ticker(s) in 'init'"
+            if lock_field is None or not isinstance(lock_field, str):
+                return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'lock'"
+            try:
+                lock_int = int(lock_field)
+                if lock_int < 1:
+                    return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be >= 1"
+            except Exception:
+                return False, BRC20ErrorCodes.INVALID_AMOUNT, "'lock' must be integer string"
+
+            src, dst = [t.strip() for t in init_field.split(",", 1)]
+            if not self.validate_ticker_format(src) or not self.validate_ticker_format(dst):
+                return False, BRC20ErrorCodes.INVALID_TICKER, "Invalid ticker(s) in 'init'"
+
+        # Validate exe path
+        if exe_field is not None:
+            slip_field = operation.get("slip")
+            if not isinstance(exe_field, str) or "," not in exe_field:
+                return False, BRC20ErrorCodes.INVALID_TICKER, "Field 'exe' must be 'SRC,DST'"
+
+            if slip_field is None or not isinstance(slip_field, str):
+                return False, BRC20ErrorCodes.INVALID_AMOUNT, "Missing or invalid 'slip'"
+            try:
+                slip_decimal = Decimal(str(slip_field))
+                if slip_decimal < 0 or slip_decimal > 100:
+                    return False, BRC20ErrorCodes.INVALID_AMOUNT, "'slip' must be between 0 and 100"
+            except Exception:
+                return False, BRC20ErrorCodes.INVALID_AMOUNT, "'slip' must be a decimal string"
+
+            src, dst = [t.strip() for t in exe_field.split(",", 1)]
+            if not self.validate_ticker_format(src) or not self.validate_ticker_format(dst):
+                return False, BRC20ErrorCodes.INVALID_TICKER, "Invalid ticker(s) in 'exe'"
 
         return True, None, None
 
@@ -410,6 +478,7 @@ class BRC20Parser:
         result["op_return_data"] = hex_data
         result["vout_index"] = vout_index
 
+        # Parse BRC-20 operation
         parse_result = self.parse_brc20_operation(hex_data)
 
         if parse_result["success"]:
@@ -495,11 +564,69 @@ class BRC20Parser:
 
             data_bytes = bytes.fromhex(op_return_data)
 
+            # Check for wmint magic code at the beginning
             wrap_magic = bytes.fromhex("5B577C4254437C4D5D")
             return data_bytes.startswith(wrap_magic)
 
         except Exception:
             return False
+
+    def _is_likely_stones_mint(self, hex_data: str) -> bool:
+        """
+        Fast detection of STONES mint in OP_RETURN.
+        STONES mint starts with hex "5d"
+        """
+        try:
+            if not hex_data or len(hex_data) < 2:
+                return False
+
+            # Check if hex starts with "5d" (case insensitive)
+            return hex_data.lower().startswith("5d")
+        except Exception:
+            return False
+
+    def parse_stones_mint(self, hex_data: str) -> Dict[str, Any]:
+        """
+        Parse STONES mint operation from hex data.
+        STONES mint: OP_RETURN hex starts with "5d"
+        Payload hardcoded: {"p":"brc-20","op":"mint","tick":"STONES","amt":"1"}
+
+        Args:
+            hex_data: Hex-encoded OP_RETURN data starting with "5d"
+
+        Returns:
+            Dict with parsed operation data for STONES mint
+        """
+        try:
+            # Verify it starts with "5d"
+            if not self._is_likely_stones_mint(hex_data):
+                return {
+                    "success": False,
+                    "data": None,
+                    "error_code": BRC20ErrorCodes.INVALID_PROTOCOL,
+                    "error_message": "Not a STONES mint operation - missing 5d prefix",
+                }
+
+            # Return STONES mint operation data (hardcoded, payload unreadable)
+            return {
+                "success": True,
+                "data": {
+                    "p": "brc-20",
+                    "op": "mint",
+                    "tick": "STONES",
+                    "amt": "1",
+                },
+                "error_message": None,
+                "error_code": None,
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "data": None,
+                "error_code": BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR,
+                "error_message": f"STONES mint parsing error: {str(e)}",
+            }
 
     def _is_transfer_operation_fast(self, hex_data: str) -> bool:
         try:
@@ -591,6 +718,7 @@ class BRC20Parser:
         try:
             data_bytes = bytes.fromhex(hex_data)
 
+            # Check for wmint magic code
             wrap_magic = bytes.fromhex("5B577C4254437C4D5D")
             if not data_bytes.startswith(wrap_magic):
                 return {
@@ -600,9 +728,10 @@ class BRC20Parser:
                     "error_message": "Not a wmint operation - missing magic code",
                 }
 
+            # Extract data after magic code
             wrap_data = data_bytes[len(wrap_magic) :]
 
-            if len(wrap_data) < 32:
+            if len(wrap_data) < 32:  # Minimum size for control_block (32 bytes)
                 return {
                     "success": False,
                     "data": None,
@@ -610,6 +739,7 @@ class BRC20Parser:
                     "error_message": "Wmint data too short - missing control_block",
                 }
 
+            # Parse control_block (32 bytes only)
             control_block = wrap_data[:32]
 
             return {

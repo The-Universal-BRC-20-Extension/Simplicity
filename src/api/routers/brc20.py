@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict
+from decimal import Decimal
 import structlog
 
 from src.database.connection import get_db
@@ -13,6 +14,7 @@ from src.api.models import (
     AddressBalance,
     Op,
     GetAllResponse,
+    HoldersResponse,
 )
 
 logger = structlog.get_logger()
@@ -36,7 +38,7 @@ def extract_data_only(wrapped_response: Dict) -> List:
 
 @router.get("/brc20/health")
 async def get_health_check():
-    return {"status": "healthy", "message": "Universal BRC-20 Indexer API is running"}
+    return {"status": "healthy", "message": "Universal BRC-20 Indexer API SWAP Activated is running"}
 
 
 @router.get("/brc20/status", response_model=IndexerStatus)
@@ -61,10 +63,12 @@ async def get_brc20_list(
     try:
         result = calc_service.get_all_tickers_with_stats(start, size)
         data = DataTransformationService.transform_paginated_response(result)
+
         transformed_data = [DataTransformationService.transform_ticker_info(item) for item in data]
-        return [Brc20InfoItem.model_validate(item) for item in transformed_data]
+
+        return [Brc20InfoItem(**item) for item in transformed_data]
     except Exception as e:
-        logger.error("Failed to get BRC20 list", error=str(e), exc_info=True)
+        logger.error("Failed to get BRC20 list", error=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -77,15 +81,17 @@ async def get_all_brc20_list(
     try:
         result = calc_service.get_all_tickers_with_stats_unlimited(max_results)
         data = DataTransformationService.transform_paginated_response(result)
+
         transformed_data = [DataTransformationService.transform_ticker_info(item) for item in data]
+
         return GetAllResponse(
             total_count=result.get("total", 0),
             returned_count=len(transformed_data),
             has_more=len(transformed_data) < result.get("total", 0),
-            data=[Brc20InfoItem.model_validate(item) for item in transformed_data],
+            data=[Brc20InfoItem(**item) for item in transformed_data],
         )
     except Exception as e:
-        logger.error("Failed to get all BRC20 list", error=str(e), exc_info=True)
+        logger.error("Failed to get all BRC20 list", error=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -98,20 +104,23 @@ async def get_ticker_info(
         result = calc_service.get_ticker_stats(ticker)
         if not result:
             raise HTTPException(status_code=404, detail="Ticker not found")
+
         transformed_data = DataTransformationService.transform_ticker_info(result)
-        return Brc20InfoItem.model_validate(transformed_data)
+
+        return Brc20InfoItem(**transformed_data)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get ticker", ticker=ticker, error=str(e), exc_info=True)
+        logger.error("Failed to get ticker", ticker=ticker, error=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/brc20/{ticker}/holders", response_model=List[AddressBalance])
+@router.get("/brc20/{ticker}/holders")
 async def get_ticker_holders(
     ticker: str,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, description="Maximum records to return (no upper limit)"),
+    include_virtual: bool = Query(False, description="Include virtual accounting entries in separate field"),
     calc_service: BRC20CalculationService = Depends(get_calculation_service),
 ):
     start, size = convert_pagination(skip, limit)
@@ -122,7 +131,22 @@ async def get_ticker_holders(
         data_with_ticker = DataTransformationService.add_ticker_to_holders(data, ticker)
         transformed_data = [DataTransformationService.transform_holder_info(item) for item in data_with_ticker]
 
-        return [AddressBalance(**item) for item in transformed_data]
+        holders = [AddressBalance(**item) for item in transformed_data]
+
+        if include_virtual:
+            virtual_accounting = result.get("virtual_accounting", [])
+            if virtual_accounting:
+                virtual_with_ticker = DataTransformationService.add_ticker_to_holders(virtual_accounting, ticker)
+                virtual_transformed = [
+                    DataTransformationService.transform_holder_info(item) for item in virtual_with_ticker
+                ]
+                virtual_entries = [AddressBalance(**item) for item in virtual_transformed]
+            else:
+                virtual_entries = None
+
+            return HoldersResponse(holders=holders, virtual_accounting=virtual_entries)
+
+        return holders
     except Exception as e:
         logger.error("Failed to get ticker holders", ticker=ticker, error=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -215,7 +239,9 @@ async def get_ticker_tx_history(
     try:
         result = calc_service.get_transaction_operations(ticker, txid)
 
-        return [Op(**item) for item in result]
+        transformed_data = [DataTransformationService.transform_transaction_operation(item) for item in result]
+
+        return [Op(**item) for item in transformed_data]
     except Exception as e:
         logger.error(
             "Failed to get ticker transaction history",
@@ -245,6 +271,47 @@ async def get_address_ticker_balance(
             "Failed to get address balance",
             address=address,
             ticker=ticker,
+            error=str(e),
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/brc20/address/{address}/tickers", response_model=List[AddressBalance])
+async def get_address_tickers(
+    address: str,
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, description="Maximum records to return (no upper limit)"),
+    calc_service: BRC20CalculationService = Depends(get_calculation_service),
+):
+    """Get all tickers with balances for an address"""
+    try:
+        ValidationService.validate_bitcoin_address(address)
+
+        start, size = convert_pagination(skip, limit)
+        result = calc_service.get_address_balances(address, start, size)
+        data = DataTransformationService.transform_paginated_response(result)
+
+        # Transform to AddressBalance format
+        transformed_data = []
+        for item in data:
+            transformed_data.append(
+                {
+                    "pkscript": "",
+                    "ticker": item.get("tick", ""),
+                    "wallet": address,
+                    "overall_balance": item.get("balance", Decimal("0")),
+                    "available_balance": item.get("balance", Decimal("0")),
+                    "block_height": item.get("transfer_height", 0),
+                }
+            )
+
+        return [AddressBalance(**item) for item in transformed_data]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to get address tickers",
+            address=address,
             error=str(e),
         )
         raise HTTPException(status_code=500, detail="Internal server error")

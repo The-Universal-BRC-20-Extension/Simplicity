@@ -30,12 +30,14 @@ RUN groupadd -r indexer && useradd -r -g indexer indexer
 RUN mkdir -p /home/indexer && chown -R indexer:indexer /home/indexer
 ENV HOME=/home/indexer
 
-# Install runtime dependencies only
+# Install runtime dependencies only (no libsecp256k1 package in slim; copy from builder)
 RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
-    libsecp256k1-2 \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy libsecp256k1 from builder (not always in slim repo; builder has it via libsecp256k1-dev)
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libsecp256k1.so* /usr/lib/x86_64-linux-gnu/
 
 # Copy Python packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
@@ -44,11 +46,13 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Create working directory
 WORKDIR /app
 
-# Copy source code
+# Copy source code and Alembic config (required for migrate service)
 COPY src/ ./src/
 COPY tests/ ./tests/
 COPY alembic/ ./alembic/
 COPY run.py ./
+# alembic.ini must be in project root at build time; required for migrate service
+COPY alembic.ini ./alembic.ini
 
 
 # Create necessary directories

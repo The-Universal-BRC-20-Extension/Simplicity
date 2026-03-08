@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 from sqlalchemy.sql import text
 
 
@@ -65,8 +66,18 @@ def upgrade() -> None:
     op.create_index(op.f("ix_extended_contracts_creation_height"), "extended_contracts", ["creation_height"], unique=False)
 
     # 3) vaults (Enum values in lowercase to align with models)
-    vaultstatus = sa.Enum("active", "abandoned", "recycled", "sovereign_recovery", "closed", name="vaultstatus")
-    vaultstatus.create(op.get_bind(), checkfirst=True)
+    # Create enum only if not exists (idempotent for partially applied or re-run migrations)
+    conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vaultstatus') THEN
+                CREATE TYPE vaultstatus AS ENUM ('active', 'abandoned', 'recycled', 'sovereign_recovery', 'closed');
+            END IF;
+        END
+        $$;
+    """))
+    # Use dialect ENUM with create_type=False so SQLAlchemy does not emit CREATE TYPE (we did it above)
+    vaultstatus = PG_ENUM("active", "abandoned", "recycled", "sovereign_recovery", "closed", name="vaultstatus", create_type=False)
 
     op.create_table(
         "vaults",
@@ -132,11 +143,8 @@ def upgrade() -> None:
     op.create_index("ix_swap_positions_unlock_height", "swap_positions", ["unlock_height"])
     op.create_index("ix_swap_positions_status", "swap_positions", ["status"])
 
-    # Drop obsolete unique constraint if present (idempotent)
-    try:
-        op.drop_constraint("uq_swap_pos_owner_pool_unlock", "swap_positions", type_="unique")
-    except Exception:
-        pass
+    # Drop obsolete unique constraint if present (idempotent; IF EXISTS avoids transaction abort)
+    conn.execute(text("ALTER TABLE swap_positions DROP CONSTRAINT IF EXISTS uq_swap_pos_owner_pool_unlock"))
 
 
 def downgrade() -> None:

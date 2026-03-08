@@ -12,7 +12,7 @@ import structlog
 
 from src.services.bitcoin_rpc import BitcoinRPCService
 from src.utils.crypto import taproot_tweak_pubkey, taproot_output_key_to_address
-from src.utils.taproot_unified import TapscriptTemplates, compute_tapleaf_hash, decode_script_num
+from src.utils.taproot_unified import TapscriptTemplates, compute_tapleaf_hash, compute_merkle_root, decode_script_num
 from src.utils.exceptions import BRC20ErrorCodes, ValidationResult
 
 logger = structlog.get_logger()
@@ -32,11 +32,103 @@ class WrapValidatorService:
 
         logger.info("WrapValidatorService initialized.")
 
+    def validate_address_from_witness(self, raw_tx_hex: str) -> ValidationResult:
+        """
+        Public method for validating a Taproot address from witness data.
+        This is a pure cryptographic check.
+        """
+        log = logger.bind(tx_hex_prefix=raw_tx_hex[:20] + "...")
+        try:
+            # Pre-validate transaction hex
+            if len(raw_tx_hex) < 100:
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    f"Transaction hex too short ({len(raw_tx_hex)} chars). " f"Minimum expected: 100 characters.",
+                )
+
+            # Ensure valid hexadecimal
+            try:
+                bytes.fromhex(raw_tx_hex)
+            except ValueError as e:
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, f"Invalid hex format for transaction: {str(e)}"
+                )
+
+            tx_dict = self.rpc.decode_raw_transaction(raw_tx_hex)
+
+            if not isinstance(tx_dict, dict):
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    f"Invalid transaction format: expected dict, got {type(tx_dict).__name__}",
+                )
+
+            log = log.bind(txid=tx_dict.get("txid"))
+
+            reconstruction_result = self._reconstruct_and_validate_contract(tx_dict)
+            if not reconstruction_result.is_valid:
+                return reconstruction_result
+
+            expected_address = reconstruction_result.additional_data["details"]["expected_address"]
+
+            # Check vout[2] for the lock output
+            if len(tx_dict.get("vout", [])) < 3:
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, "Tx must have at least 3 outputs."
+                )
+
+            lock_output = tx_dict["vout"][2]
+            found_address = lock_output.get("scriptPubKey", {}).get("address")
+
+            if expected_address != found_address:
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    "Reconstructed address does not match address in vout[2].",
+                    additional_data={
+                        "details": {"expected_address": expected_address, "found_address": found_address},
+                        "crypto_data": reconstruction_result.additional_data["crypto_data"],
+                    },
+                )
+
+            return ValidationResult(True, "VALID", additional_data=reconstruction_result.additional_data)
+
+        except Exception as e:
+            log.error("Unexpected error during address validation.", exc_info=True)
+            return ValidationResult(False, BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR, f"Internal validation error: {e}")
+
     def validate_mint_operation(self, raw_tx_hex: str) -> ValidationResult:
         """Single entry point for validating a W token mint transaction from its raw hex."""
         log = logger.bind(tx_hex_prefix=raw_tx_hex[:20] + "...")
         try:
+            # Pre-validate transaction hex
+            if len(raw_tx_hex) < 100:
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    f"Transaction hex too short ({len(raw_tx_hex)} chars). "
+                    f"Minimum expected: 100 characters. A valid Bitcoin transaction is typically 200+ characters.",
+                )
+
+            # Ensure valid hexadecimal
+            try:
+                bytes.fromhex(raw_tx_hex)
+            except ValueError as e:
+                return ValidationResult(
+                    False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, f"Invalid hex format for transaction: {str(e)}"
+                )
+
             tx_dict = self.rpc.decode_raw_transaction(raw_tx_hex)
+
+            if not isinstance(tx_dict, dict):
+                return ValidationResult(
+                    False,
+                    BRC20ErrorCodes.INVALID_WRAP_STRUCTURE,
+                    f"Invalid transaction format: expected dict, got {type(tx_dict).__name__}. "
+                    f"Response: {str(tx_dict)[:200]}",
+                )
+
             log = log.bind(txid=tx_dict.get("txid"))
 
             reconstruction_result = self._reconstruct_and_validate_contract(tx_dict)
@@ -52,6 +144,7 @@ class WrapValidatorService:
     def validate_from_tx_obj(self, tx_info: Dict[str, Any], operation_data: Dict[str, Any]) -> ValidationResult:
         """Validate a Wrap Token mint from transaction object and operation data."""
         try:
+            # First check if ticker is supported (must be "W")
             ticker = operation_data.get("tick")
             if ticker != "W":
                 return ValidationResult(
@@ -60,6 +153,7 @@ class WrapValidatorService:
                     f"Ticker '{ticker}' is not supported for Wrap Token validation. Only 'W' is currently supported.",
                 )
 
+            # Validate the transaction structure and cryptographic proof
             reconstruction_result = self._reconstruct_and_validate_contract(tx_info)
             if not reconstruction_result.is_valid:
                 return reconstruction_result
@@ -69,19 +163,6 @@ class WrapValidatorService:
         except Exception as e:
             logger.error("Unexpected error during wrap validation.", exc_info=True)
             return ValidationResult(False, BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR, f"Internal validation error: {e}")
-
-    def validate_address_from_witness(self, raw_tx_hex: str) -> ValidationResult:
-        """Lightweight validation to reconstruct address from witness and compare to output.
-        Provided for API router compatibility; returns basic ValidationResult.
-        """
-        try:
-            tx_dict = self.rpc.decode_raw_transaction(raw_tx_hex)
-            vins = tx_dict.get("vin", [])
-            if not vins:
-                return ValidationResult(False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, "Missing inputs")
-            return ValidationResult(True)
-        except Exception as e:
-            return ValidationResult(False, BRC20ErrorCodes.INVALID_WRAP_STRUCTURE, str(e))
 
     def _reconstruct_and_validate_contract(self, tx_dict: Dict[str, Any]) -> ValidationResult:
         """Parses witness, validates structure, and cryptographically reconstructs the expected address."""
@@ -125,6 +206,7 @@ class WrapValidatorService:
         csv_blocks = parsed_script["csv_blocks"]
 
         try:
+
             multisig_script = TapscriptTemplates.create_multisig_script(alice_pubkey)
             csv_script = TapscriptTemplates.create_csv_script(csv_blocks)
             emergency_script = TapscriptTemplates.create_emergency_script(alice_pubkey)
@@ -133,11 +215,15 @@ class WrapValidatorService:
             csv_leaf = compute_tapleaf_hash(csv_script)
             emergency_leaf = compute_tapleaf_hash(emergency_script)
 
+            # JavaScript structure: ROOT -> Branch1(multisig+recover) + csv
+            # Order: multisig < recover < csv (lexicographic)
             from src.utils.crypto import tagged_hash
 
+            # Branch1 = TapBranch(multisig, recover) - sorted lexicographically
             multisig_vs_emergency = sorted([multisig_leaf, emergency_leaf])
             branch1_hash = tagged_hash("TapBranch", multisig_vs_emergency[0] + multisig_vs_emergency[1])
 
+            # ROOT = TapBranch(Branch1, csv) - sorted lexicographically
             branch1_vs_csv = sorted([branch1_hash, csv_leaf])
             merkle_root = tagged_hash("TapBranch", branch1_vs_csv[0] + branch1_vs_csv[1])
 
@@ -145,14 +231,31 @@ class WrapValidatorService:
 
             expected_address = taproot_output_key_to_address(output_key)
 
+            crypto_data = {
+                "alice_pubkey_xonly": alice_pubkey.hex(),
+                "platform_pubkey_xonly": self.operator_pubkey.hex(),
+                "internal_key_xonly": internal_key.hex(),
+                "csv_blocks": csv_blocks,
+                "multisig_script": multisig_script.hex(),
+                "csv_script": csv_script.hex(),
+                "multisig_leaf_hash": multisig_leaf.hex(),
+                "csv_leaf_hash": csv_leaf.hex(),
+                "merkle_root": merkle_root.hex(),
+                "output_key": output_key.hex(),
+                "parity": parity,
+            }
+
             return ValidationResult(
                 True,
                 additional_data={
-                    "expected_address": expected_address,
-                    "w_proof_commitment": merkle_root.hex(),
-                    "alice_pubkey": alice_pubkey.hex(),
-                    "internal_key": internal_key.hex(),
-                    "csv_blocks": csv_blocks,
+                    "details": {
+                        "expected_address": expected_address,
+                        "w_proof_commitment": merkle_root.hex(),
+                        "alice_pubkey": alice_pubkey.hex(),
+                        "internal_key": internal_key.hex(),
+                        "csv_blocks": csv_blocks,
+                    },
+                    "crypto_data": crypto_data,
                 },
             )
         except Exception as e:
@@ -160,7 +263,8 @@ class WrapValidatorService:
             return ValidationResult(False, BRC20ErrorCodes.UNKNOWN_PROCESSING_ERROR, "Taproot reconstruction failed.")
 
     def _validate_final_conditions(self, tx_dict, reconstruction_result, operation_data=None) -> ValidationResult:
-        expected_address = reconstruction_result.additional_data["expected_address"]
+        """Compares the reconstructed address and amount with the actual transaction outputs."""
+        expected_address = reconstruction_result.additional_data["details"]["expected_address"]
 
         lock_output = tx_dict["vout"][2]
 
@@ -199,7 +303,7 @@ class WrapValidatorService:
             additional_data={
                 "address": found_address,
                 "amount_sats": found_amount_sats,
-                "crypto_proof": reconstruction_result.additional_data,
+                "crypto_proof": reconstruction_result.additional_data["details"],
             },
         )
 
@@ -227,6 +331,7 @@ class ScriptParser:
         return True
 
     def _read_pushdata(self) -> Optional[bytes]:
+        """Reads a data push from the script, handling different push opcodes."""
         if self.offset >= len(self.script):
             return None
 
@@ -241,7 +346,6 @@ class ScriptParser:
                 return None
             length = int.from_bytes(len_bytes, "little")
             return self._read_bytes(length)
-
         elif opcode == 0:  # OP_0
             return b""
 
@@ -261,6 +365,7 @@ class ScriptParser:
 
             if not self._read_opcode(0x00) or not self._read_opcode(0x63):
                 return None
+
             pushed_marker = self._read_pushdata()
             if pushed_marker is None or pushed_marker != b"W_PROOF":
                 return None

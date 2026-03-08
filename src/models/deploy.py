@@ -12,7 +12,7 @@ class Deploy(Base):
     remaining_supply = Column(
         Numeric(precision=38, scale=8),
         nullable=False,
-        comment="Remaining/available supply - equals max_supply for standard tokens, updated by wmint/burn for Wrap tokens",
+        comment="Total supply accounting: max_supply + total_locked_in_active_swap_positions. For standard tokens without swaps: equals max_supply. For Wrap tokens: updated by wmint/burn. For swap tokens: incremented on swap.init (lock) and decremented on position expiration (unlock).",
     )
     limit_per_op = Column(Numeric(precision=38, scale=8), nullable=True)
     deploy_txid = Column(String, nullable=False)

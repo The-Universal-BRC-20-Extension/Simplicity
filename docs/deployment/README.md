@@ -49,6 +49,15 @@
   rpcbind=127.0.0.1
   rpcallowip=127.0.0.1
   ```
+  **If the indexer runs in Docker and Bitcoin on the host:** RPC must accept connections from the Docker network. Add (or replace with):
+  ```
+  rpcbind=0.0.0.0
+  rpcallowip=127.0.0.1
+  rpcallowip=172.17.0.0/16
+  ```
+  (172.17.0.0/16 is the default Docker bridge; adjust if you use a custom network.)
+- **If you get "403 Forbidden" from RPC:** When using `rpcuser`/`rpcpassword` in `bitcoin.conf`, set `BITCOIN_RPC_USER` and `BITCOIN_RPC_PASSWORD` in `.env` to those **exact** values (do not use `__cookie__` or cookie file content).  
+  **Docker with Bitcoin on host:** To avoid 403 entirely, use the host-network override so the indexer runs like a local process: `cp docker-compose.override.yml.example docker-compose.override.yml` then `docker compose up -d`. See the main README "Docker ready-to-go when Bitcoin Core runs on the host".
 - **Start Bitcoin Core** and wait for it to fully sync.
 - **Verify status:**
   ```bash

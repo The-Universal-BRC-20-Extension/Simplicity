@@ -25,6 +25,7 @@ MANIFEST
 # Environments
 .env
 .env.back
+docker-compose.override.yml
 .venv
 env/
 venv/
@@ -65,8 +66,18 @@ backups/
 dev/
 .rules/
 .cursor/
+plans/
 
-# Alembic
-# Ne pas ignorer les fichiers de migration
+# Alembic (keep migration files tracked)
 !alembic/versions/
+
+# Do not commit env backups or legacy backups
 .env.back
+.env.backup*
+*.backup*
+*.patch
+
+# Generated reports (optional; keep out of repo)
+bandit-report.json
+
+temp

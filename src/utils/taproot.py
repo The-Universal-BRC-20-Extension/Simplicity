@@ -1,9 +1,9 @@
 """
-Taproot cryptographic utilities for Wrap Token validation.
+Taproot cryptographic utilities for OPI protocol validation.
 """
 
 import hashlib
-from typing import Optional
+from typing import Optional, Tuple, List
 from src.utils.exceptions import ValidationResult, BRC20ErrorCodes
 
 
@@ -61,6 +61,7 @@ def derive_taproot_output_key(internal_pubkey: bytes, taptweak: bytes) -> bytes:
     Returns:
         32-byte output public key
     """
+    # Simplified implementation
     return bytes(a ^ b for a, b in zip(internal_pubkey, taptweak))
 
 
@@ -81,90 +82,99 @@ def compute_taproot_address(output_key: bytes, network: str = "mainnet") -> str:
         return f"tb1p{output_key.hex()}"
 
 
-def validate_tapscript_template(tapscript: bytes, template_type: str, OPERATOR_PUBKEY: bytes) -> ValidationResult:
+def validate_tapscript_template(tapscript: bytes, template_type: str, platform_pubkey: bytes) -> ValidationResult:
     """
     Validate tapscript against known templates.
 
     Args:
         tapscript: Tapscript bytes to validate
         template_type: "multisig" or "timelock"
-        OPERATOR_PUBKEY: 32-byte platform public key (x-only)
+        platform_pubkey: 32-byte platform public key (x-only)
 
     Returns:
         ValidationResult indicating if template is valid
     """
     if template_type == "multisig":
-        return _validate_multisig_template(tapscript, OPERATOR_PUBKEY)
+        return _validate_multisig_template(tapscript, platform_pubkey)
     elif template_type == "timelock":
-        return _validate_timelock_template(tapscript, OPERATOR_PUBKEY)
+        return _validate_timelock_template(tapscript, platform_pubkey)
     else:
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, f"Unknown template type: {template_type}")
 
 
-def _validate_multisig_template(tapscript: bytes, OPERATOR_PUBKEY: bytes) -> ValidationResult:
+def _validate_multisig_template(tapscript: bytes, platform_pubkey: bytes) -> ValidationResult:
     """
     Validate 2-of-2 multisig template:
-    <alice_pubkey_x_only> OP_CHECKSIG <OPERATOR_PUBKEY_x_only> OP_CHECKSIGADD OP_2 OP_EQUAL
+    <alice_pubkey_x_only> OP_CHECKSIG <platform_pubkey_x_only> OP_CHECKSIGADD OP_2 OP_EQUAL
     """
-    # Expected pattern: 20<alice_pubkey>ac20<OPERATOR_PUBKEY>ba5287
+    # Expected pattern: 20<alice_pubkey>ac20<platform_pubkey>ba5287
     if len(tapscript) < 65:  # Minimum length for valid template
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, "Tapscript too short for multisig template")
 
+    # Check for OP_CHECKSIG (0xac) at position 21
     if tapscript[20] != 0xAC:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: missing OP_CHECKSIG"
         )
 
+    # Check for platform pubkey at position 22-53
     if len(tapscript) < 54:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: missing platform pubkey"
         )
 
-    if tapscript[21:53] != OPERATOR_PUBKEY:
+    if tapscript[21:53] != platform_pubkey:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: platform pubkey mismatch"
         )
 
+    # Check for OP_CHECKSIGADD (0xba) at position 54
     if tapscript[53] != 0xBA:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: missing OP_CHECKSIGADD"
         )
 
+    # Check for OP_2 (0x52) at position 55
     if tapscript[54] != 0x52:
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: missing OP_2")
 
+    # Check for OP_EQUAL (0x87) at position 56
     if tapscript[55] != 0x87:
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid multisig template: missing OP_EQUAL")
 
     return ValidationResult(True)
 
 
-def _validate_timelock_template(tapscript: bytes, OPERATOR_PUBKEY: bytes) -> ValidationResult:
+def _validate_timelock_template(tapscript: bytes, platform_pubkey: bytes) -> ValidationResult:
     """
     Validate CSV timelock template:
-    <csv_delay> OP_CHECKSEQUENCEVERIFY OP_DROP <OPERATOR_PUBKEY_x_only> OP_CHECKSIG
+    <csv_delay> OP_CHECKSEQUENCEVERIFY OP_DROP <platform_pubkey_x_only> OP_CHECKSIG
     """
-    if len(tapscript) < 35:
+    if len(tapscript) < 35:  # Minimum length for valid template
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, "Tapscript too short for timelock template")
 
+    # Check for OP_CHECKSEQUENCEVERIFY (0xb2) at position 2
     if tapscript[1] != 0xB2:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid timelock template: missing OP_CHECKSEQUENCEVERIFY"
         )
 
+    # Check for OP_DROP (0x75) at position 3
     if tapscript[2] != 0x75:
         return ValidationResult(False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid timelock template: missing OP_DROP")
 
+    # Check for platform pubkey at position 4-35
     if len(tapscript) < 36:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid timelock template: missing platform pubkey"
         )
 
-    if tapscript[3:35] != OPERATOR_PUBKEY:
+    if tapscript[3:35] != platform_pubkey:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid timelock template: platform pubkey mismatch"
         )
 
+    # Check for OP_CHECKSIG (0xac) at position 36
     if tapscript[35] != 0xAC:
         return ValidationResult(
             False, BRC20ErrorCodes.INVALID_OPERATION, "Invalid timelock template: missing OP_CHECKSIG"
@@ -176,11 +186,16 @@ def _validate_timelock_template(tapscript: bytes, OPERATOR_PUBKEY: bytes) -> Val
 def extract_internal_pubkey_from_input(input_obj: dict) -> Optional[bytes]:
     """
     Extract internal public key from transaction input.
+    This is a simplified implementation - in practice, you'd need to
+    parse the witness data more carefully.
+
     Args:
         input_obj: Bitcoin input object
+
     Returns:
         32-byte internal public key or None
     """
+    # Simplified
     if "txinwitness" in input_obj and input_obj["txinwitness"]:
         witness = input_obj["txinwitness"]
         if len(witness) >= 2:
@@ -192,7 +207,7 @@ def extract_internal_pubkey_from_input(input_obj: dict) -> Optional[bytes]:
 
 
 def validate_taproot_contract(
-    tapscript: bytes, internal_pubkey: bytes, script_address: str, OPERATOR_PUBKEY: bytes, template_type: str
+    tapscript: bytes, internal_pubkey: bytes, script_address: str, platform_pubkey: bytes, template_type: str
 ) -> ValidationResult:
     """
     Complete validation of Taproot contract.
@@ -201,24 +216,30 @@ def validate_taproot_contract(
         tapscript: Tapscript bytes
         internal_pubkey: 32-byte internal public key
         script_address: Expected P2TR address
-        OPERATOR_PUBKEY: 32-byte platform public key
+        platform_pubkey: 32-byte platform public key
         template_type: "multisig" or "timelock"
 
     Returns:
         ValidationResult indicating if contract is valid
     """
-    template_validation = validate_tapscript_template(tapscript, template_type, OPERATOR_PUBKEY)
+    # Validate tapscript template
+    template_validation = validate_tapscript_template(tapscript, template_type, platform_pubkey)
     if not template_validation.is_valid:
         return template_validation
 
+    # Compute Merkle root
     merkle_root = compute_merkle_root(tapscript)
 
+    # Compute TapTweak
     taptweak = compute_tap_tweak(internal_pubkey, merkle_root)
 
+    # Derive output key
     output_key = derive_taproot_output_key(internal_pubkey, taptweak)
 
+    # Compute expected address
     expected_address = compute_taproot_address(output_key)
 
+    # Validate address matches
     if expected_address != script_address:
         return ValidationResult(
             False,

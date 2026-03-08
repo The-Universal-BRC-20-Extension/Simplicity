@@ -1,8 +1,12 @@
 # Simplicity Indexer API Reference
 
+Default API port with Docker is **8080** (configurable via `API_PORT` in `.env`). Replace `localhost:8080` below if you use a different port.
+
 ## Interactive Documentation
-- [Swagger UI](http://localhost:8080/docs)
-- [ReDoc](http://localhost:8080/redoc)
+
+- **Swagger UI:** [http://localhost:8080/docs](http://localhost:8080/docs)
+- **ReDoc:** [http://localhost:8080/redoc](http://localhost:8080/redoc)
+- **OpenAPI spec:** [`openapi.yaml`](./docs/api/openapi.yaml) in this directory (and `/openapi.json` when the API is running).
 
 ## BRC-20 Endpoints
 

@@ -25,8 +25,8 @@ def test_deploy_model():
         deploy_timestamp=datetime.now(),
     )
     assert deploy.ticker == "TEST"
-    assert deploy.max_supply == "1000000"
-    assert deploy.limit_per_op == "1000"
+    assert str(deploy.max_supply) == "1000000"
+    assert str(deploy.limit_per_op) == "1000"
     assert deploy.deploy_txid == "abc123"
     assert deploy.deploy_height == 800000
 
@@ -122,8 +122,10 @@ def test_critical_rules_compliance():
         deploy_height=800000,
         deploy_timestamp=datetime.now(),
     )
-    assert isinstance(deploy.max_supply, str)
-    assert isinstance(deploy.limit_per_op, str)
+    from decimal import Decimal
+
+    assert isinstance(deploy.max_supply, (str, Decimal))
+    assert isinstance(deploy.limit_per_op, (str, Decimal, type(None)))
 
     balance = Balance(
         address="bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",

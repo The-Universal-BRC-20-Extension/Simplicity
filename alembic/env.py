@@ -28,6 +28,10 @@ from src.models import *
 target_metadata = Base.metadata
 
 def get_url():
+    # Use sqlalchemy.url from config when provided (e.g. pytest conftest passes TEST_DATABASE_URL)
+    url = config.get_main_option("sqlalchemy.url")
+    if url:
+        return url
     return settings.DATABASE_URL
 
 # other values from the config, defined by the needs of env.py,

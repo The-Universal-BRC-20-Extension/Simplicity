@@ -1,28 +1,26 @@
-# docker-compose.yml - Development Setup
-version: '3.8'
+# Simplicity - BRC-20 Indexer (plug-and-play)
+# Three commands: git clone, cp .env.example .env, docker-compose up -d
+# Requires: Docker, Docker Compose. No host dependencies.
+# (version is obsolete in Compose V2 and is ignored)
 
 services:
   postgres:
-    image: postgres:13
+    image: postgres:17-alpine
     environment:
-      POSTGRES_DB: brc20_indexer
-      POSTGRES_USER: indexer
-      POSTGRES_PASSWORD: indexer_password
-    ports:
-      - "127.0.0.1:5432:5432"  # Localhost only
+      POSTGRES_DB: ${POSTGRES_DB:-brc20_indexer}
+      POSTGRES_USER: ${POSTGRES_USER:-indexer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backups:/backups
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U indexer -d brc20_indexer"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-indexer} -d ${POSTGRES_DB:-brc20_indexer}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
-    image: redis:6-alpine
-    ports:
-      - "127.0.0.1:6380:6379"  # Host port 6380 -> Container port 6379
+    image: redis:7-alpine
     volumes:
       - redis_data:/data
     healthcheck:
@@ -30,61 +28,121 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
-  indexer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "127.0.0.1:8080:8080"  # Localhost only - secure by default
-    env_file:
-      - .env  # All sensitive config (Bitcoin RPC, DB, Redis, etc) should be set in .env
+  # Restore: if DB is empty, restore from SNAPSHOT_FILE (local) or SNAPSHOT_URL (public). See docs/SNAPSHOT.md.
+  restore:
+    image: postgres:17-alpine
+    env_file: .env
     environment:
-      # Database (use service name for Docker networking)
-      DATABASE_URL: postgresql://indexer:indexer_password@postgres:5432/brc20_indexer
-      # Redis (use service name for Docker networking)
-      REDIS_URL: redis://redis:6379/0
-      # API Configuration
-      API_HOST: 0.0.0.0
-      API_PORT: 8080
-      # Indexer Configuration
-      START_BLOCK_HEIGHT: 895534
-      BATCH_SIZE: 100
-      ENABLE_CACHING: true
-      # Logging
-      LOG_LEVEL: INFO
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-indexer}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-brc20_indexer}
+      SNAPSHOT_FILE: ${SNAPSHOT_FILE:-}
+      SNAPSHOT_URL: ${SNAPSHOT_URL:-}
+    volumes:
+      - ./scripts/docker_restore_if_empty.sh:/restore.sh:ro
+      - ./backups:/backups:ro
+    command: ["sh", "-c", "apk add --no-cache curl 2>/dev/null; sh /restore.sh"]
     depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Migrate: runs Alembic against Postgres (host "postgres" in the Docker network).
+  migrate:
+    build: .
+    working_dir: /app
+    command: ["sh", "-c", "exec python -m alembic -c /app/alembic.ini upgrade head"]
+    env_file: .env
+    environment:
+      ALEMBIC_CONFIG: /app/alembic.ini
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-indexer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brc20_indexer}
+    depends_on:
+      restore:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+
+  # Indexer: Postgres/Redis via Docker network (postgres, redis). Bitcoin RPC from .env (external or host.docker.internal).
+  # If you get 403 with Bitcoin on host: cp docker-compose.override.yml.example docker-compose.override.yml
+  indexer:
+    build: .
+    command: ["python", "run.py", "--indexer-only", "--continuous"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-indexer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brc20_indexer}
+      REDIS_URL: redis://redis:6379/0
+      BITCOIN_RPC_URL: ${BITCOIN_RPC_URL:?Set BITCOIN_RPC_URL in .env}
+      BITCOIN_RPC_USER: ${BITCOIN_RPC_USER:-}
+      BITCOIN_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD:-}
+      BITCOIN_RPC_COOKIE_FILE: ${BITCOIN_RPC_COOKIE_FILE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./logs:/app/logs
-      - ./temp_docs:/app/temp_docs
+      - indexer_logs:/app/logs
     restart: unless-stopped
+
+  # Bitcoin Core (optional): use with docker compose --profile bitcoind up -d. Requires ~750GB for chain.
+  bitcoind:
+    image: ruimarinho/bitcoin-core:24.0.1
+    profiles:
+      - bitcoind
+    command:
+      - sh
+      - -c
+      - >
+        exec bitcoind -server=1 -txindex=1
+        -rpcuser=$${BITCOIN_RPC_USER} -rpcpassword=$${BITCOIN_RPC_PASSWORD}
+        -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0
+    env_file: .env
+    environment:
+      BITCOIN_RPC_USER: ${BITCOIN_RPC_USER:-bitcoin}
+      BITCOIN_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD:?Set BITCOIN_RPC_PASSWORD in .env for bitcoind profile}
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    restart: unless-stopped
+
+  # API: same Postgres/Redis; API_PORT from .env (e.g. 8085) is used for port and mapping.
+  api:
+    build: .
+    command: ["sh", "-c", "exec uvicorn src.api.main:app --host 0.0.0.0 --port ${API_PORT:-8080}"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-indexer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brc20_indexer}
+      REDIS_URL: redis://redis:6379/0
+      API_HOST: 127.0.0.1
+      API_PORT: ${API_PORT:-8080}
+    ports:
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/indexer/brc20/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:$${API_PORT:-8080}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Optional: Database migration service
-  migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: ["alembic", "upgrade", "head"]
-    environment:
-      DATABASE_URL: postgresql://indexer:indexer_password@postgres:5432/brc20_indexer
-    depends_on:
-      postgres:
-        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
-
-# SECURITY WARNING:
-# This setup is for local development only. If you expose any service to the internet,
-# you MUST change all default passwords and users in your .env and in this file (POSTGRES_USER, POSTGRES_PASSWORD, etc).
-# Never expose PostgreSQL or Redis directly to the internet. 
+  indexer_logs:
+  bitcoin_data:

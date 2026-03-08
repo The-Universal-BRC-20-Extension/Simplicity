@@ -12,19 +12,35 @@ class Brc20InfoItem(OrmConfig):
     ticker: str = Field(description="BRC-20 ticker symbol")
     decimals: int = Field(default=8, description="Token decimals")
     max_supply: Decimal = Field(description="Maximum token supply")
-    limit_per_mint: Decimal = Field(description="Maximum amount per mint")
+    limit_per_mint: Optional[Decimal] = Field(default=None, description="Maximum amount per mint (None if no limit)")
     actual_deploy_txid_for_api: str = Field(description="Deploy transaction ID (txid)")
     deploy_tx_id: str = Field(description="Deploy transaction ID (same as actual_deploy_txid_for_api)")
     deploy_block_height: int = Field(description="Block height of deployment")
     deploy_timestamp: str = Field(description="Deploy timestamp (ISO 8601 string)")
     creator_address: str = Field(default="", description="Address that deployed token")
     remaining_supply: Decimal = Field(description="Remaining mintable supply")
-    current_supply: Decimal = Field(description="Currently minted supply")
+    minted: Decimal = Field(description="Total minted (sum of all valid mint operations)")
+    current_supply: Decimal = Field(description="Current supply (sum of all balances)")
+    circulating_supply: Optional[Decimal] = Field(
+        default=None, description="Tokens available on market (not locked in swap positions)"
+    )
+    total_locked: Optional[Decimal] = Field(default=None, description="Total tokens locked in active swap positions")
     holders: int = Field(description="Current number of token holders")
+    is_curve: bool = Field(default=False, description="Whether this ticker is a Curve reward token (OPI-2)")
 
-    @field_serializer("max_supply", "limit_per_mint", "remaining_supply", "current_supply")
-    def serialize_dec_to_str(self, v: Decimal, _info):
-        return str(v) if v is not None else None
+    @field_serializer(
+        "max_supply",
+        "limit_per_mint",
+        "remaining_supply",
+        "minted",
+        "current_supply",
+        "circulating_supply",
+        "total_locked",
+    )
+    def serialize_dec_to_str(self, v, _info):
+        if v is None:
+            return None
+        return str(v) if isinstance(v, Decimal) else str(Decimal(v))
 
 
 BRC20InfoItem = Brc20InfoItem
@@ -43,6 +59,13 @@ class AddressBalance(OrmConfig):
         return str(v) if v is not None else None
 
 
+class HoldersResponse(OrmConfig):
+    holders: List[AddressBalance] = Field(description="List of holders (real balances only)")
+    virtual_accounting: Optional[List[AddressBalance]] = Field(
+        default=None, description="Virtual accounting entries for partially filled pool positions"
+    )
+
+
 class Op(OrmConfig):
     id: int = Field(description="Unique operation ID")
     tx_id: str = Field(description="Transaction hash (wtxid) containing this operation")
@@ -57,6 +80,7 @@ class Op(OrmConfig):
     from_address: Optional[str] = Field(None, description="Sender address (for transfers)")
     to_address: Optional[str] = Field(None, description="Recipient address (for transfers)")
     valid: Optional[bool] = Field(None, description="Is the BRC-20 operation valid?")
+    is_marketplace: bool = Field(default=False, description="Is this a marketplace transfer?")
 
     @field_serializer("amount")
     def serialize_amount_to_str(self, v: Decimal, _info):
@@ -132,7 +156,7 @@ class ValidateAddressRequest(BaseModel):
 
 class CryptoDetails(BaseModel):
     alice_pubkey_xonly: str
-    OPERATOR_PUBKEY_xonly: str
+    platform_pubkey_xonly: str
     internal_key_xonly: str
     csv_blocks: int
     multisig_script: str

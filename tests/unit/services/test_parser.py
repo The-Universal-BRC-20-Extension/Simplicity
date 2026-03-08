@@ -52,6 +52,9 @@ class TestBRC20Parser:
         )
         # {"p":"brc-20","op":"deploy","tick":"0","m":"21000000"}
 
+        # Valid P2PKH script (25 bytes): 76 a9 14 [20 bytes pubkey hash] 88 ac
+        self.valid_p2pkh_hex = "76a914" + "a" * 40 + "88ac"
+
         # Create proper OP_RETURN scripts
         self.valid_deploy_script = self._create_op_return_script(self.valid_deploy_hex)
         self.valid_mint_script = self._create_op_return_script(self.valid_mint_hex)
@@ -72,7 +75,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -116,7 +119,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 }
@@ -235,13 +238,13 @@ class TestBRC20Parser:
         assert error_code == BRC20ErrorCodes.MISSING_OPERATION
 
     def test_validate_json_structure_invalid_operation(self):
-        """Test invalid operation field"""
-        operation = {"p": "brc-20", "op": "burn", "tick": "TEST", "m": "1000"}
+        """Test invalid operation field (op not in deploy/mint/transfer/test_opi/burn/swap)"""
+        operation = {"p": "brc-20", "op": "unknown_op", "tick": "TEST", "m": "1000"}
 
         is_valid, error_code, error_message = self.parser.validate_json_structure(operation)
 
-        # New behavior: 'burn' is accepted by the parser's operation registry
-        assert is_valid is True
+        assert is_valid is False
+        assert error_code == BRC20ErrorCodes.INVALID_OPERATION
 
     def test_validate_json_structure_missing_ticker(self):
         """Test missing ticker field"""
@@ -299,7 +302,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -348,7 +351,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -371,7 +374,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 }
@@ -406,7 +409,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -431,7 +434,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -450,7 +453,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -470,7 +473,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -490,7 +493,7 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
@@ -515,14 +518,14 @@ class TestBRC20Parser:
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },
                 {
                     "scriptPubKey": {
                         "type": "pubkeyhash",
-                        "hex": "76a914...",
+                        "hex": self.valid_p2pkh_hex,
                         "addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"],
                     }
                 },

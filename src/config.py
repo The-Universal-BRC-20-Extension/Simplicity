@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     BITCOIN_RPC_URL: str = "http://localhost:8332"
     BITCOIN_RPC_USER: str = "bitcoinrpc"
     BITCOIN_RPC_PASSWORD: str = "password"
+    BITCOIN_RPC_COOKIE_FILE: Optional[str] = None
+    # Optional: for external providers (QuickNode, Alchemy). Use header-based auth instead of Basic.
+    # BITCOIN_RPC_AUTH_HEADER: "Bearer" (default) -> Authorization: Bearer <key>; "x-token" -> x-token: <key>; "api-key" -> api-key: <key>
+    BITCOIN_RPC_API_KEY: Optional[str] = None
+    BITCOIN_RPC_AUTH_HEADER: str = "Bearer"
 
     # Indexing settings
     START_BLOCK_HEIGHT: int = 895534  # Universal BRC-20 start
@@ -41,6 +46,16 @@ class Settings(BaseSettings):
         901350  # Block height when new marketplace transfer template validation starts
     )
 
+    # Emergency marketplace transfer sender fix block range
+    EMERGENCY_MARKETPLACE_SENDER_START_BLOCK: Optional[int] = None  # Start block for emergency sender fix (inclusive)
+    EMERGENCY_MARKETPLACE_SENDER_END_BLOCK: Optional[int] = None  # End block for emergency sender fix (inclusive)
+
+    # Swap protocol activation heights
+    SWAP_EXE_ACTIVATION_HEIGHT: int = 926480  # Block height when swap.exe operations are activated
+
+    # STONES mint activation height
+    STONES_ACTIVATION_HEIGHT: int = 925399  # Block height when STONES mint operations are activated
+
     # Performance
     MAX_WORKERS: int = 1  # Sequential processing
     DB_POOL_SIZE: int = 5
@@ -52,6 +67,15 @@ class Settings(BaseSettings):
     METRICS_ENABLED: bool = True
     HEALTH_CHECK_INTERVAL: int = 60
 
+    # Logging Configuration
+    LOG_FILTER_STONES_MINT: bool = True  # Filter STONES mint logs
+    LOG_FILTER_ALL_MINTS: bool = True  # Filter all mint operations
+    LOG_SEPARATE_INDEXER_API: bool = True  # Separate indexer and API logs
+    LOG_ENABLE_FILE_LOGGING: bool = False  # Enable file logging with rotation
+    LOG_DIR: Optional[str] = None  # Directory for log files (default: logs/)
+    LOG_MAX_BYTES: int = 100 * 1024 * 1024  # 100MB per log file
+    LOG_BACKUP_COUNT: int = 10  # Number of rotated log files to keep
+
     # Error handling
     MAX_RETRIES: int = 3
     RETRY_DELAY: int = 5
@@ -60,6 +84,7 @@ class Settings(BaseSettings):
     # API
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8083
+    API_WORKERS: int = 9  # Number of Gunicorn workers for API
 
     # Cache Redis
     REDIS_URL: str = "redis://localhost:6380/0"
@@ -82,7 +107,7 @@ class Settings(BaseSettings):
     }
 
     # Taproot Wrap Configuration (x-only format, without 03 prefix)
-    OPERATOR_PUBKEY: str = "d22eaaa259553e25fcdd2bba871702ca2c305bdf4384ce6b90db139700949fb5"
+    PLATFORM_PUBKEY: str = "d22eaaa259553e25fcdd2bba871702ca2c305bdf4384ce6b90db139700949fb5"
 
     # Wrap Protocol Constants
     WRAP_TICKER: str = "W"

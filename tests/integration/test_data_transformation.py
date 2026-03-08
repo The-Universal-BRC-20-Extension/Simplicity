@@ -23,8 +23,7 @@ class TestDataTransformation:
 
         assert result["ticker"] == "OPQT"
         assert result["decimals"] == 18
-        # New transformation may not echo back max directly; ensure fallback to provided 'max'
-        assert result["max_supply"] in ("21000000", None)
+        assert result["max_supply"] == "21000000"
         assert result["limit_per_mint"] == "1000"
         assert result["deploy_tx_id"] == "abc123def456"
         assert result["actual_deploy_txid_for_api"] == "abc123def456"
@@ -33,7 +32,7 @@ class TestDataTransformation:
         assert result["creator_address"] == "bc1qabcdef123456"
         assert result["current_supply"] == "7000"
         assert result["holders"] == 5
-        assert result["remaining_supply"] in ("20993000", "0")
+        assert result["remaining_supply"] == "20993000"  # 21000000 - 7000
 
     def test_transform_operation(self):
         backend_data = {

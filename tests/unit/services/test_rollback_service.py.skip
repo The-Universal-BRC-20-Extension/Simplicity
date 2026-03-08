@@ -1,0 +1,275 @@
+"""
+Unit tests for RollbackService.
+
+Tests cover:
+- Balance delta calculation
+- Balance updates application
+- Deploy deletion
+- Operation deletion
+- Block deletion
+- Dry-run mode
+- Error handling
+"""
+
+import pytest
+from decimal import Decimal
+from unittest.mock import Mock
+from sqlalchemy.orm import Session
+
+from src.services.rollback_service import RollbackService
+from src.models.transaction import BRC20Operation
+from src.models.balance import Balance
+from src.models.deploy import Deploy
+from src.models.block import ProcessedBlock
+
+
+class TestRollbackService:
+    """Test RollbackService functionality"""
+
+    @pytest.fixture
+    def rollback_service(self):
+        """Create RollbackService instance"""
+        return RollbackService()
+
+    @pytest.fixture
+    def mock_session(self):
+        """Mock database session"""
+        session = Mock(spec=Session)
+        return session
+
+    def test_calculate_rollback_deltas_for_mint(self, rollback_service):
+        """Test balance delta calculation for mint operation"""
+        # Create mock mint operation
+        mint_op = Mock(spec=BRC20Operation)
+        mint_op.operation = "mint"
+        mint_op.ticker = "TEST"
+        mint_op.amount = Decimal("100")
+        mint_op.to_address = "address1"
+        mint_op.from_address = None
+        mint_op.txid = "tx1"
+        mint_op.block_height = 1000
+
+        balance_updates, deploys = rollback_service._calculate_rollback_deltas([mint_op])
+
+        # Mint should decrease recipient balance
+        assert ("address1", "TEST") in balance_updates
+        assert balance_updates[("address1", "TEST")] == Decimal("-100")
+        assert len(deploys) == 0
+
+    def test_calculate_rollback_deltas_for_transfer(self, rollback_service):
+        """Test balance delta calculation for transfer operation"""
+        # Create mock transfer operation
+        transfer_op = Mock(spec=BRC20Operation)
+        transfer_op.operation = "transfer"
+        transfer_op.ticker = "TEST"
+        transfer_op.amount = Decimal("50")
+        transfer_op.from_address = "sender"
+        transfer_op.to_address = "receiver"
+        transfer_op.txid = "tx2"
+        transfer_op.block_height = 1001
+
+        balance_updates, deploys = rollback_service._calculate_rollback_deltas([transfer_op])
+
+        # Transfer should increase sender and decrease receiver
+        assert ("sender", "TEST") in balance_updates
+        assert balance_updates[("sender", "TEST")] == Decimal("50")
+        assert ("receiver", "TEST") in balance_updates
+        assert balance_updates[("receiver", "TEST")] == Decimal("-50")
+        assert len(deploys) == 0
+
+    def test_calculate_rollback_deltas_for_deploy(self, rollback_service):
+        """Test balance delta calculation for deploy operation"""
+        # Create mock deploy operation
+        deploy_op = Mock(spec=BRC20Operation)
+        deploy_op.operation = "deploy"
+        deploy_op.ticker = "NEWTOKEN"
+        deploy_op.amount = None
+        deploy_op.from_address = "deployer"
+        deploy_op.to_address = None
+        deploy_op.txid = "tx3"
+        deploy_op.block_height = 1002
+
+        balance_updates, deploys = rollback_service._calculate_rollback_deltas([deploy_op])
+
+        # Deploy should be marked for deletion
+        assert len(balance_updates) == 0
+        assert "NEWTOKEN" in deploys
+
+    def test_apply_balance_updates_valid(self, rollback_service, mock_session):
+        """Test applying valid balance updates"""
+        # Mock balance record
+        mock_balance = Mock(spec=Balance)
+        mock_balance.balance = Decimal("100")
+
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_balance
+
+        balance_updates = {("address1", "TEST"): Decimal("50")}
+
+        rollback_service._apply_balance_updates(mock_session, balance_updates, dry_run=False)
+
+        # Balance should be updated
+        assert mock_balance.balance == Decimal("150")
+
+    def test_apply_balance_updates_negative_error(self, rollback_service, mock_session):
+        """Test that negative balance raises error"""
+        # Mock balance record with insufficient balance
+        mock_balance = Mock(spec=Balance)
+        mock_balance.balance = Decimal("50")
+
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_balance
+
+        balance_updates = {("address1", "TEST"): Decimal("-100")}
+
+        # Should raise ValueError for negative balance
+        with pytest.raises(ValueError, match="Balance would become negative"):
+            rollback_service._apply_balance_updates(mock_session, balance_updates, dry_run=False)
+
+    def test_apply_balance_updates_dry_run(self, rollback_service, mock_session):
+        """Test dry-run mode doesn't modify balances"""
+        # Mock balance record
+        mock_balance = Mock(spec=Balance)
+        mock_balance.balance = Decimal("100")
+        original_balance = mock_balance.balance
+
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_balance
+
+        balance_updates = {("address1", "TEST"): Decimal("50")}
+
+        rollback_service._apply_balance_updates(mock_session, balance_updates, dry_run=True)
+
+        # Balance should NOT be updated in dry-run
+        assert mock_balance.balance == original_balance
+
+    def test_delete_deploys(self, rollback_service, mock_session):
+        """Test deploy deletion"""
+        # Mock deploy record
+        mock_deploy = Mock(spec=Deploy)
+        mock_session.query.return_value.filter.return_value.first.return_value = mock_deploy
+
+        deploys_to_delete = {"TEST"}
+
+        count = rollback_service._delete_deploys(mock_session, deploys_to_delete, dry_run=False)
+
+        # Deploy should be deleted
+        mock_session.delete.assert_called_once_with(mock_deploy)
+        assert count == 1
+
+    def test_delete_deploys_dry_run(self, rollback_service, mock_session):
+        """Test deploy deletion in dry-run mode"""
+        # Mock deploy record
+        mock_deploy = Mock(spec=Deploy)
+        mock_session.query.return_value.filter.return_value.first.return_value = mock_deploy
+
+        deploys_to_delete = {"TEST"}
+
+        count = rollback_service._delete_deploys(mock_session, deploys_to_delete, dry_run=True)
+
+        # Deploy should NOT be deleted in dry-run
+        mock_session.delete.assert_not_called()
+        assert count == 0
+
+    def test_delete_operations(self, rollback_service, mock_session):
+        """Test operation deletion"""
+        # Mock query count and delete
+        mock_query = Mock()
+        mock_query.count.return_value = 10
+        mock_query.delete.return_value = 10
+        mock_session.query.return_value.filter.return_value = mock_query
+
+        count = rollback_service._delete_operations(mock_session, target_height=1000, dry_run=False)
+
+        assert count == 10
+        mock_query.delete.assert_called_once()
+
+    def test_delete_blocks(self, rollback_service, mock_session):
+        """Test block deletion"""
+        # Mock query count and delete
+        mock_query = Mock()
+        mock_query.count.return_value = 5
+        mock_query.delete.return_value = 5
+        mock_session.query.return_value.filter.return_value = mock_query
+
+        count = rollback_service._delete_blocks(mock_session, target_height=1000, dry_run=False)
+
+        assert count == 5
+        mock_query.delete.assert_called_once()
+
+    def test_rollback_after_height_complete_flow(self, rollback_service, mock_session):
+        """Test complete rollback flow"""
+        # Mock operations query
+        mock_transfer = Mock(spec=BRC20Operation)
+        mock_transfer.operation = "transfer"
+        mock_transfer.ticker = "TEST"
+        mock_transfer.amount = Decimal("100")
+        mock_transfer.from_address = "sender"
+        mock_transfer.to_address = "receiver"
+        mock_transfer.block_height = 1001
+        mock_transfer.tx_index = 1
+        mock_transfer.id = 1
+        mock_transfer.txid = "tx1"
+        mock_transfer.is_valid = True
+
+        # Setup mock queries
+        operations_query = Mock()
+        operations_query.all.return_value = [mock_transfer]
+
+        mock_session.query.return_value.filter.return_value.order_by.return_value = operations_query
+
+        # Mock balance
+        mock_balance = Mock(spec=Balance)
+        mock_balance.balance = Decimal("100")
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_balance
+
+        # Mock operations/blocks count and delete
+        mock_ops_query = Mock()
+        mock_ops_query.count.return_value = 1
+        mock_ops_query.delete.return_value = 1
+
+        mock_blocks_query = Mock()
+        mock_blocks_query.count.return_value = 1
+        mock_blocks_query.delete.return_value = 1
+
+        # Setup side effects for different queries
+        def query_side_effect(model):
+            if model == BRC20Operation:
+                if hasattr(query_side_effect, "call_count"):
+                    query_side_effect.call_count += 1
+                    if query_side_effect.call_count == 1:
+                        return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+                    else:
+                        return Mock(filter=Mock(return_value=mock_ops_query))
+                else:
+                    query_side_effect.call_count = 1
+                    return Mock(filter=Mock(return_value=Mock(order_by=Mock(return_value=operations_query))))
+            elif model == Balance:
+                return Mock(filter_by=Mock(return_value=Mock(first=Mock(return_value=mock_balance))))
+            elif model == ProcessedBlock:
+                return Mock(filter=Mock(return_value=mock_blocks_query))
+            return Mock()
+
+        mock_session.query.side_effect = query_side_effect
+
+        # Execute rollback
+        stats = rollback_service.rollback_after_height(mock_session, target_height=1000, dry_run=False)
+
+        # Verify stats
+        assert stats["operations_count"] == 1
+        assert stats["balance_updates"] == 2  # sender + receiver
+        assert stats["deploys_deleted"] == 0
+
+    def test_rollback_after_height_no_operations(self, rollback_service, mock_session):
+        """Test rollback with no operations to rollback"""
+        # Mock empty operations query
+        operations_query = Mock()
+        operations_query.all.return_value = []
+
+        mock_session.query.return_value.filter.return_value.order_by.return_value = operations_query
+
+        stats = rollback_service.rollback_after_height(mock_session, target_height=1000, dry_run=False)
+
+        # Should return zeros
+        assert stats["operations_count"] == 0
+        assert stats["balance_updates"] == 0
+        assert stats["deploys_deleted"] == 0
+        assert stats["operations_deleted"] == 0
+        assert stats["blocks_deleted"] == 0

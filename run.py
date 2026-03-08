@@ -3,28 +3,10 @@ Runnable script for the Universal BRC-20 Indexer.
 """
 
 import argparse
-import uvicorn
-from src.main import main as run_indexer
-from src.api.main import app as api_app
-from src.config import settings
+import os
 import multiprocessing
 import time
 import structlog
-
-logger = structlog.get_logger()
-
-
-def start_indexer_process(max_blocks=None, continuous=False):
-    """Starts the indexer in a separate process."""
-    logger.info("Starting indexer process...", continuous=continuous)
-    run_indexer(max_blocks=max_blocks, continuous=continuous)
-
-
-def start_api_server():
-    """Starts the FastAPI server."""
-    logger.info("Starting API server...")
-    uvicorn.run(api_app, host=settings.API_HOST, port=settings.API_PORT)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Universal BRC-20 Indexer")
@@ -42,6 +24,26 @@ if __name__ == "__main__":
         help="Run in continuous mode (process new blocks as they arrive)",
     )
     args = parser.parse_args()
+
+    if args.indexer_only:
+        os.environ["USE_INDEXER_DB_POOL"] = "true"
+
+    import uvicorn
+    from src.main import main as run_indexer
+    from src.api.main import app as api_app
+    from src.config import settings
+
+    logger = structlog.get_logger()
+
+    def start_indexer_process(max_blocks=None, continuous=False):
+        """Starts the indexer in a separate process."""
+        logger.info("Starting indexer process...", continuous=continuous)
+        run_indexer(max_blocks=max_blocks, continuous=continuous)
+
+    def start_api_server():
+        """Starts the FastAPI server."""
+        logger.info("Starting API server...")
+        uvicorn.run(api_app, host=settings.API_HOST, port=settings.API_PORT)
 
     if args.indexer_only:
         run_indexer(max_blocks=args.max_blocks, continuous=args.continuous)

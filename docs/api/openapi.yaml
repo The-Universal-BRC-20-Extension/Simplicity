@@ -1,0 +1,3195 @@
+openapi: 3.1.0
+info:
+  title: Simplicity - Universal BRC-20 Indexer API
+  description: |
+    API for the Universal BRC-20 Indexer, providing access to BRC-20 data on the Bitcoin blockchain.
+    
+    This API provides endpoints for:
+    - Retrieving information about BRC-20 tokens
+    - Querying address balances
+    - Checking transaction history
+    - Validating Wrap (W) operations
+    - Managing swap positions
+    - Monitoring the mempool
+  version: 2.1.0
+servers:
+  - url: http://localhost:8080
+    description: Default (Docker; override with API_PORT in .env)
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication
+  
+  schemas:
+    BRC20InfoItem:
+      type: object
+      properties:
+        ticker:
+          type: string
+          description: BRC-20 token symbol
+          example: "W"
+        decimals:
+          type: integer
+          description: Number of decimals
+          default: 8
+          example: 18
+        max_supply:
+          type: string
+          description: Maximum supply
+          example: "21000000"
+        limit_per_mint:
+          type: string
+          description: Maximum amount per mint
+          example: "1000"
+        actual_deploy_txid_for_api:
+          type: string
+          description: Deploy transaction ID (txid)
+          example: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        deploy_tx_id:
+          type: string
+          description: Deploy transaction ID (same as actual_deploy_txid_for_api)
+          example: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        deploy_block_height:
+          type: integer
+          description: Deploy block height
+          example: 896000
+        deploy_timestamp:
+          type: string
+          format: date-time
+          description: Deploy timestamp (ISO 8601)
+          example: "2025-01-01T12:00:00Z"
+        creator_address:
+          type: string
+          description: Address that deployed the token
+          default: ""
+          example: "bc1qxyxfsv2zv0fdn433m78kkd0fcqsdhfn5k4udrr"
+        remaining_supply:
+          type: string
+          description: Remaining supply available to mint
+          example: "15000000"
+        current_supply:
+          type: string
+          description: Currently minted supply
+          example: "6000000"
+        holders:
+          type: integer
+          description: Current number of token holders
+          example: 12500
+    
+    AddressBalance:
+      type: object
+      properties:
+        pkscript:
+          type: string
+          description: Le pkscript (toujours vide pour la phase 8-3A)
+          default: ""
+        ticker:
+          type: string
+          description: BRC-20 token symbol
+          example: "W"
+        wallet:
+          type: string
+          description: L'adresse du détenteur (champ nommé 'wallet' et non 'address')
+          example: "bc1qxyxfsv2zv0fdn433m78kkd0fcqsdhfn5k4udrr"
+        overall_balance:
+          type: string
+          description: Solde total détenu
+          example: "100.5"
+        available_balance:
+          type: string
+          description: Solde disponible (identique à overall_balance)
+          example: "100.5"
+        block_height:
+          type: integer
+          description: Dernière hauteur de bloc affectant ce solde
+          example: 896000
+    
+    Op:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: ID unique de l'opération
+          example: 12345
+        tx_id:
+          type: string
+          description: Hash de la transaction (wtxid) contenant cette opération
+          example: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        txid:
+          type: string
+          nullable: true
+          description: ID de transaction traditionnel (txid)
+          example: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        op:
+          type: string
+          description: Type d'opération BRC-20 (deploy, mint, transfer)
+          enum: [deploy, mint, transfer]
+          example: "mint"
+        ticker:
+          type: string
+          description: Ticker concerné
+          example: "W"
+        amount:
+          type: string
+          nullable: true
+          description: Montant de l'opération
+          example: "10.5"
+        block_height:
+          type: integer
+          description: Hauteur du bloc
+          example: 896000
+        block_hash:
+          type: string
+          description: Hash du bloc
+          example: "000000000000000000025c4f0c8981c7095257ce47c35b19aec03f468fce7b72"
+        tx_index:
+          type: integer
+          description: Index de la transaction dans le bloc
+          example: 15
+        timestamp:
+          type: string
+          format: date-time
+          description: Horodatage de l'opération (chaîne ISO 8601)
+          example: "2025-01-01T12:00:00Z"
+        from_address:
+          type: string
+          nullable: true
+          description: Adresse de l'expéditeur (pour les transferts)
+          example: "bc1qxyxfsv2zv0fdn433m78kkd0fcqsdhfn5k4udrr"
+        to_address:
+          type: string
+          nullable: true
+          description: Adresse du destinataire (pour les transferts)
+          example: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+        valid:
+          type: boolean
+          nullable: true
+          description: L'opération BRC-20 est-elle valide ?
+          example: true
+        is_marketplace:
+          type: boolean
+          description: S'agit-il d'un transfert marketplace ?
+          default: false
+          example: false
+    
+    IndexerStatus:
+      type: object
+      properties:
+        current_block_height_network:
+          type: integer
+          description: Hauteur actuelle du bloc réseau
+          example: 895000
+        last_indexed_block_main_chain:
+          type: integer
+          description: Dernier bloc indexé sur la chaîne principale
+          example: 894990
+        last_indexed_brc20_op_block:
+          type: integer
+          description: Dernier bloc contenant des opérations BRC-20 indexées
+          example: 894985
+    
+    GetAllResponse:
+      type: object
+      properties:
+        total_count:
+          type: integer
+          description: Nombre total d'enregistrements disponibles
+          example: 15000
+        returned_count:
+          type: integer
+          description: Nombre d'enregistrements retournés dans cette réponse
+          example: 1000
+        has_more:
+          type: boolean
+          description: S'il y a plus d'enregistrements disponibles
+          example: true
+        data:
+          type: array
+          description: Tableau d'enregistrements
+          items:
+            type: object
+            description: Le type des items dépend de l'endpoint appelé.
+
+    # Modèles pour les validations Wrap
+    ValidateWrapMintRequest:
+      type: object
+      required:
+        - raw_tx_hex
+      properties:
+        raw_tx_hex:
+          type: string
+          description: Représentation hexadécimale brute de la transaction Bitcoin
+          example: "0200000000010001a83c..."
+    
+    ValidationDetails:
+      type: object
+      properties:
+        expected_address:
+          type: string
+          nullable: true
+          description: Adresse attendue
+          example: "bc1p..."
+        found_address:
+          type: string
+          nullable: true
+          description: Adresse trouvée
+          example: "bc1p..."
+        expected_amount_sats:
+          type: integer
+          nullable: true
+          description: Montant attendu en satoshis
+          example: 660
+        found_amount_sats:
+          type: integer
+          nullable: true
+          description: Montant trouvé en satoshis
+          example: 660
+    
+    ValidateWrapMintResponse:
+      type: object
+      required:
+        - is_valid
+        - reason
+      properties:
+        is_valid:
+          type: boolean
+          description: Si la transaction est valide
+          example: true
+        reason:
+          type: string
+          description: Code ou message indiquant le résultat de la validation
+          example: "VALID"
+        details:
+          $ref: '#/components/schemas/ValidationDetails'
+          nullable: true
+
+    ValidateAddressRequest:
+      type: object
+      required:
+        - raw_tx_hex
+      properties:
+        raw_tx_hex:
+          type: string
+          description: Représentation hexadécimale brute de la transaction Bitcoin
+          example: "0200000000010001a83c..."
+
+    CryptoDetails:
+      type: object
+      properties:
+        alice_pubkey_xonly:
+          type: string
+        platform_pubkey_xonly:
+          type: string
+        internal_key_xonly:
+          type: string
+        csv_blocks:
+          type: integer
+        multisig_script:
+          type: string
+        csv_script:
+          type: string
+        multisig_leaf_hash:
+          type: string
+        csv_leaf_hash:
+          type: string
+        merkle_root:
+          type: string
+        output_key:
+          type: string
+        parity:
+          type: integer
+
+    ValidateAddressResponse:
+      type: object
+      required:
+        - is_valid
+        - reason
+      properties:
+        is_valid:
+          type: boolean
+          description: Si l'adresse reconstruite est valide
+        reason:
+          type: string
+          description: "VALID ou la description de l'erreur"
+        expected_address:
+          type: string
+          nullable: true
+        found_address:
+          type: string
+          nullable: true
+        crypto_details:
+          $ref: '#/components/schemas/CryptoDetails'
+          nullable: true
+
+    # Modèles Swap
+    SwapPositionItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: ID de la position
+          example: 1
+        owner:
+          type: string
+          description: Adresse du propriétaire
+          example: "bc1q..."
+        src:
+          type: string
+          description: Ticker source
+          example: "W"
+        dst:
+          type: string
+          description: Ticker de destination
+          example: "RATS"
+        amount_locked:
+          type: string
+          description: Montant verrouillé
+          example: "10.5"
+        lock_start_height:
+          type: integer
+          description: Hauteur de début de verrouillage
+          example: 895000
+        unlock_height:
+          type: integer
+          description: Hauteur de déverrouillage
+          example: 896000
+        status:
+          type: string
+          description: État de la position
+          enum: [active, completed, expired]
+          example: "active"
+        init_operation_id:
+          type: integer
+          nullable: true
+          description: ID de l'opération d'initialisation
+          example: 12345
+    
+    ListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Nombre total d'éléments
+          example: 150
+        limit:
+          type: integer
+          description: Limite de résultats par page
+          example: 100
+        offset:
+          type: integer
+          description: Décalage pour la pagination
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SwapPositionItem'
+
+    PoolItem:
+      type: object
+      properties:
+        pool_id:
+          type: string
+        src:
+          type: string
+        dst:
+          type: string
+        active_positions:
+          type: integer
+        locked_sum:
+          type: string
+        next_expiration_height:
+          type: integer
+          nullable: true
+
+    PoolListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PoolItem'
+
+    PoolReservesResponse:
+      type: object
+      required:
+        - pool_id
+        - token_a
+        - token_b
+        - reserve_a
+        - reserve_b
+      properties:
+        pool_id:
+          type: string
+          description: "ID canonique du pool (trié alphabétiquement)"
+          example: "LOL-WTF"
+        token_a:
+          type: string
+          description: "Premier token du pool (trié alphabétiquement)"
+          example: "LOL"
+        token_b:
+          type: string
+          description: "Deuxième token du pool (trié alphabétiquement)"
+          example: "WTF"
+        reserve_a:
+          type: string
+          description: "Réserve de token_a (somme des positions actives avec src_ticker=token_a)"
+          example: "1000000.00000000"
+        reserve_b:
+          type: string
+          description: "Réserve de token_b (somme des positions actives avec src_ticker=token_b)"
+          example: "500000.00000000"
+        last_updated_height:
+          type: integer
+          nullable: true
+          description: "Dernière hauteur de bloc où une position active a été créée"
+          example: 926300
+
+    # Modèles pour le mempool
+    PendingResponse:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Adresse Bitcoin vérifiée
+          example: "bc1q..."
+        ticker:
+          type: string
+          description: Ticker BRC-20 vérifié
+          example: "W"
+        has_pending_transfer:
+          type: boolean
+          description: Si l'adresse a des transferts BRC-20 en attente pour ce ticker
+          example: true
+
+    AddressRequest:
+      type: object
+      required:
+        - address
+        - ticker
+      properties:
+        address:
+          type: string
+          description: Adresse Bitcoin à vérifier
+          example: "bc1q..."
+        ticker:
+          type: string
+          description: Ticker BRC-20 à vérifier
+          example: "W"
+
+    # Modèles pour les contrats Wrap
+    ContractItem:
+      type: object
+      properties:
+        script_address:
+          type: string
+          description: Adresse du script
+          example: "bc1p..."
+        initiator_address:
+          type: string
+          description: Adresse de l'initiateur
+          example: "bc1q..."
+        status:
+          type: string
+          description: État du contrat
+          example: "active"
+        initial_amount:
+          type: string
+          nullable: true
+          description: Montant initial
+          example: "10"
+        timelock_delay:
+          type: integer
+          nullable: true
+          description: Délai de verrouillage temporel
+          example: 144
+        creation_height:
+          type: integer
+          description: Hauteur de création
+          example: 895000
+        closure_height:
+          type: integer
+          nullable: true
+          description: Hauteur de clôture
+          example: 896000
+
+    ContractListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Nombre total d'éléments
+          example: 150
+        limit:
+          type: integer
+          description: Limite de résultats par page
+          example: 100
+        offset:
+          type: integer
+          description: Décalage pour la pagination
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContractItem'
+
+    WTVLResponse:
+      type: object
+      properties:
+        ticker:
+          type: string
+          description: Ticker
+          example: "W"
+        remaining_locked:
+          type: string
+          description: Montant restant verrouillé
+          example: "100.5"
+    
+    WMetricsResponse:
+      type: object
+      properties:
+        tvl_w:
+          type: string
+          description: Valeur totale verrouillée en W
+          example: "500.25"
+        active_contracts:
+          type: string
+          description: Nombre de contrats actifs
+          example: "42"
+        closed_contracts:
+          type: string
+          description: Nombre de contrats fermés
+          example: "18"
+        expired_contracts:
+          type: string
+          description: Nombre de contrats expirés
+          example: "5"
+
+    # Schémas pour les exécutions Swap
+    SwapExecutionItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: ID de l'opération d'exécution
+          example: 12345
+        txid:
+          type: string
+          description: ID de transaction
+          example: "abcdef1234567890..."
+        executor:
+          type: string
+          description: Adresse de l'exécuteur
+          example: "bc1q..."
+        ticker:
+          type: string
+          description: Ticker concerné
+          example: "W"
+        amount:
+          type: string
+          description: Montant exécuté
+          example: "100.5"
+        block_height:
+          type: integer
+          description: Hauteur du bloc
+          example: 895000
+        timestamp:
+          type: string
+          format: date-time
+          description: Horodatage de l'exécution
+          example: "2025-01-01T12:00:00Z"
+
+    ExecutionListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Nombre total d'exécutions
+          example: 150
+        limit:
+          type: integer
+          description: Limite de résultats par page
+          example: 100
+        offset:
+          type: integer
+          description: Décalage pour la pagination
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SwapExecutionItem'
+
+    # Schémas pour les métriques Swap
+    GlobalStatsResponse:
+      type: object
+      properties:
+        total_positions:
+          type: integer
+          description: Nombre total de positions créées
+          example: 1234
+        active_positions:
+          type: integer
+          description: Positions actuellement actives
+          example: 567
+        expired_positions:
+          type: integer
+          description: Positions expirées (non remplies)
+          example: 400
+        closed_positions:
+          type: integer
+          description: Positions fermées (remplies via swap.exe)
+          example: 267
+        total_locked:
+          type: string
+          description: Montant total verrouillé dans les positions actives
+          example: "123456.78900000"
+        total_executions:
+          type: integer
+          description: Nombre total d'exécutions swap.exe
+          example: 890
+        total_volume:
+          type: string
+          description: Volume total exécuté
+          example: "987654.32100000"
+        unique_pools:
+          type: integer
+          description: Nombre de pools uniques avec positions actives
+          example: 45
+        unique_executors:
+          type: integer
+          description: Nombre d'exécuteurs uniques
+          example: 234
+
+    TimeSeriesItem:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          description: Date au format ISO (YYYY-MM-DD)
+          example: "2025-01-16"
+        executions:
+          type: integer
+          description: Nombre d'exécutions ce jour-là
+          example: 45
+        volume:
+          type: string
+          description: Volume total exécuté ce jour-là
+          example: "12345.67890000"
+        unique_executors:
+          type: integer
+          description: Nombre d'exécuteurs uniques ce jour-là
+          example: 12
+
+    TimeSeriesResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimeSeriesItem'
+
+    TopExecutorItem:
+      type: object
+      properties:
+        executor:
+          type: string
+          description: Adresse de l'exécuteur
+          example: "bc1q..."
+        executions:
+          type: integer
+          description: Nombre total d'exécutions
+          example: 123
+        total_volume:
+          type: string
+          description: Volume total exécuté
+          example: "567890.12345678"
+        last_execution:
+          type: string
+          format: date-time
+          nullable: true
+          description: Date/heure de la dernière exécution (ISO 8601)
+          example: "2025-01-16T12:34:56Z"
+
+    TopExecutorsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopExecutorItem'
+
+    FillRateStatsResponse:
+      type: object
+      properties:
+        total_initiated:
+          type: integer
+          description: Nombre total de positions créées
+          example: 1000
+        filled_positions:
+          type: integer
+          description: Positions remplies (fermées)
+          example: 600
+        expired_positions:
+          type: integer
+          description: Positions expirées (non remplies)
+          example: 300
+        active_positions:
+          type: integer
+          description: Positions actuellement actives
+          example: 100
+        fill_rate_percent:
+          type: string
+          description: Taux de remplissage en pourcentage
+          example: "60.0"
+        avg_fill_time_hours:
+          type: number
+          nullable: true
+          description: Temps moyen de remplissage en heures (null si aucune position remplie)
+          example: 24.5
+
+    SwapQuoteResponse:
+      type: object
+      required:
+        - src_ticker
+        - dst_ticker
+        - amount_in
+        - amount_out
+        - slippage_percent
+        - expected_rate
+        - actual_rate
+        - is_partial_fill
+        - protocol_fee
+        - pool_id
+        - reserve_in_before
+        - reserve_out_before
+        - reserve_in_after
+        - reserve_out_after
+        - k_constant
+        - price_impact
+        - price_impact_percent
+      properties:
+        src_ticker:
+          type: string
+          description: Ticker du token source
+          example: "LOL"
+        dst_ticker:
+          type: string
+          description: Ticker du token destination
+          example: "WTF"
+        amount_in:
+          type: string
+          description: Montant réellement utilisé (peut être < amount demandé si partial fill)
+          example: "100.0"
+        amount_out:
+          type: string
+          description: Montant exact de DST tokens attendu
+          example: "95.23456789"
+        slippage_percent:
+          type: string
+          description: Pourcentage de slippage réel calculé
+          example: "0.5"
+        expected_rate:
+          type: string
+          description: Taux de change attendu (spot price avant swap)
+          example: "1.0"
+        actual_rate:
+          type: string
+          description: Taux de change réel à l'exécution
+          example: "0.995"
+        is_partial_fill:
+          type: boolean
+          description: true si le swap sera partiellement rempli (slippage > tolérance)
+          example: false
+        protocol_fee:
+          type: string
+          description: Frais protocolaires (0.3% de la sortie)
+          example: "0.285704"
+        pool_id:
+          type: string
+          description: ID du pool (format: "TOKEN_A-TOKEN_B", trié alphabétiquement)
+          example: "LOL-WTF"
+        reserve_in_before:
+          type: string
+          description: Réserve du token source avant swap
+          example: "1000000.0"
+        reserve_out_before:
+          type: string
+          description: Réserve du token destination avant swap
+          example: "1000000.0"
+        reserve_in_after:
+          type: string
+          description: Réserve du token source après swap
+          example: "1000100.0"
+        reserve_out_after:
+          type: string
+          description: Réserve du token destination après swap
+          example: "999904.76543211"
+        k_constant:
+          type: string
+          description: Constante k du produit constant AMM (reserve_in × reserve_out)
+          example: "1000000000000.0"
+        price_impact:
+          type: string
+          description: Price impact en décimal (ex: "0.1" pour 10%)
+          example: "0.1"
+        price_impact_percent:
+          type: string
+          description: Price impact en pourcentage (ex: "10.0" pour 10%)
+          example: "10.0"
+    
+    TvlResponse:
+      type: object
+      properties:
+        ticker:
+          type: string
+          description: BRC-20 token symbol
+          example: "W"
+        total_locked_positions_sum:
+          type: string
+          description: Somme totale des montants verrouillés dans les positions actives
+          example: "123456.78900000"
+        deploy_remaining_supply:
+          type: string
+          description: Approvisionnement restant du token (depuis Deploy)
+          example: "987654.32100000"
+        tvl_estimate:
+          type: string
+          description: Estimation de la valeur totale verrouillée
+          example: "1111111.11000000"
+
+    PoolTransactionsResponse:
+      type: object
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregatedTransaction'
+        total:
+          type: integer
+          description: Nombre total de transactions (pour pagination)
+          example: 150
+        limit:
+          type: integer
+          description: Limite de transactions retournées
+          example: 20
+        offset:
+          type: integer
+          description: Décalage pour la pagination
+          example: 0
+
+    AggregatedTransaction:
+      type: object
+      required:
+        - txid
+        - block_height
+        - operation_type
+        - created_at
+        - action
+        - pool_id
+      properties:
+        txid:
+          type: string
+          nullable: true
+          description: ID de transaction Bitcoin
+          example: "abcdef123456..."
+        block_height:
+          type: integer
+          description: Hauteur du bloc
+          example: 926300
+        operation_type:
+          type: string
+          enum: [swap_init, swap_exe, unlock]
+          description: Type d'opération
+          example: "swap_exe"
+        created_at:
+          type: string
+          format: date-time
+          description: Date de création (ISO 8601)
+          example: "2025-01-15T10:30:00Z"
+        action:
+          type: string
+          description: Action principale (raw, backend Next.js fait le mapping vers labels)
+          example: "credit_executor_dst_balance"
+        pool_id:
+          type: string
+          description: ID du pool
+          example: "LOL-WTF"
+        # swap_exe fields
+        src_ticker:
+          type: string
+          nullable: true
+          description: Ticker source (pour swap_exe)
+          example: "LOL"
+        dst_ticker:
+          type: string
+          nullable: true
+          description: Ticker destination (pour swap_exe)
+          example: "WTF"
+        amount_in:
+          type: string
+          nullable: true
+          description: Montant entrant (pour swap_exe)
+          example: "100.0"
+        amount_out_token_a:
+          type: string
+          nullable: true
+          description: Volume token_a (pour swap_exe)
+          example: "95.23456789"
+        amount_out_token_b:
+          type: string
+          nullable: true
+          description: Volume token_b (pour swap_exe)
+          example: "0"
+        fees_token_a:
+          type: string
+          nullable: true
+          description: Fees token_a (pour swap_exe)
+          example: "0.285704"
+        fees_token_b:
+          type: string
+          nullable: true
+          description: Fees token_b (pour swap_exe)
+          example: "0"
+        src_balance_before:
+          type: string
+          nullable: true
+          description: Balance source avant (pour swap_exe)
+          example: "1000.0"
+        src_balance_after:
+          type: string
+          nullable: true
+          description: Balance source après (pour swap_exe)
+          example: "900.0"
+        dst_balance_before:
+          type: string
+          nullable: true
+          description: Balance destination avant (pour swap_exe)
+          example: "500.0"
+        dst_balance_after:
+          type: string
+          nullable: true
+          description: Balance destination après (pour swap_exe)
+          example: "595.23456789"
+        # swap_init fields
+        ticker:
+          type: string
+          nullable: true
+          description: Ticker (pour swap_init)
+          example: "LOL"
+        amount:
+          type: string
+          nullable: true
+          description: Montant locked (pour swap_init)
+          example: "100.0"
+        lock_blocks:
+          type: integer
+          nullable: true
+          description: Nombre de blocs de lock (pour swap_init)
+          example: 1440
+        ticker_balance_before:
+          type: string
+          nullable: true
+          description: Balance ticker avant (pour swap_init)
+          example: "1000.0"
+        ticker_balance_after:
+          type: string
+          nullable: true
+          description: Balance ticker après (pour swap_init)
+          example: "900.0"
+
+    ConcurrencyHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, warning, error]
+          description: État de santé général
+          example: "healthy"
+        recent_conflicts:
+          type: integer
+          description: Nombre de conflits récents
+          example: 0
+        duplicate_blocks:
+          type: integer
+          description: Nombre de blocs dupliqués
+          example: 0
+        potential_reorgs:
+          type: integer
+          description: Nombre potentiel de réorganisations détectées
+          example: 0  
+        last_processed_block:
+          type: integer
+          description: Dernier bloc traité
+          example: 895000
+        processing_rate_blocks_per_hour:
+          type: integer
+          description: Taux de traitement en blocs par heure
+          example: 60
+        optimistic_locking_enabled:
+          type: boolean
+          description: Si le verrouillage optimiste est activé
+          example: true
+        reorg_detection_enabled:
+          type: boolean
+          description: Si la détection de réorganisation est activée
+          example: true
+        timestamp:
+          type: string
+          format: date-time
+          description: Horodatage
+          example: "2025-01-01T12:00:00Z"
+
+    # Schémas pour Balance Changes
+    BalanceChangeItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: ID unique du changement
+          example: 1
+        address:
+          type: string
+          description: "Adresse modifiée (ou POOL::pool_id ou DEPLOY::ticker)"
+          example: "bc1q..."
+        ticker:
+          type: string
+          description: Symbole du token
+          example: "W"
+        amount_delta:
+          type: string
+          description: Delta de balance (positif = crédit, négatif = débit)
+          example: "100.5"
+        balance_before:
+          type: string
+          description: Balance avant modification
+          example: "1000.0"
+        balance_after:
+          type: string
+          description: Balance après modification
+          example: "1100.5"
+        operation_type:
+          type: string
+          description: Type d'opération (swap_init, swap_exe, unlock)
+          enum: [swap_init, swap_exe, unlock]
+          example: "swap_init"
+        action:
+          type: string
+          description: Action spécifique
+          example: "debit_user_balance"
+        txid:
+          type: string
+          nullable: true
+          description: ID de transaction Bitcoin
+          example: "abcdef123456..."
+        block_height:
+          type: integer
+          description: Hauteur du bloc
+          example: 922082
+        block_hash:
+          type: string
+          nullable: true
+          description: Hash du bloc
+          example: "0000000000..."
+        tx_index:
+          type: integer
+          nullable: true
+          description: Index de la transaction dans le bloc
+          example: 1
+        operation_id:
+          type: integer
+          nullable: true
+          description: ID de l'opération BRC-20
+          example: 12345
+        swap_position_id:
+          type: integer
+          nullable: true
+          description: ID de la position de swap
+          example: 14
+        swap_pool_id:
+          type: integer
+          nullable: true
+          description: ID du pool de swap
+          example: 2
+        pool_id:
+          type: string
+          nullable: true
+          description: "ID canonique du pool"
+          example: "LOL-WTF"
+        change_metadata:
+          type: object
+          nullable: true
+          description: Métadonnées additionnelles (JSON)
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+          description: Horodatage de création
+          example: "2025-01-01T12:00:00Z"
+
+    BalanceChangeListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Nombre total d'enregistrements
+          example: 99
+        limit:
+          type: integer
+          description: Limite de résultats par page
+          example: 100
+        offset:
+          type: integer
+          description: Décalage pour la pagination
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BalanceChangeItem'
+
+    BalanceChangeAggregateItem:
+      type: object
+      properties:
+        group_key:
+          type: string
+          nullable: true
+          description: Valeur du groupement
+          example: "bc1q..."
+        count:
+          type: integer
+          description: Nombre de changements
+          example: 10
+        total_delta:
+          type: string
+          description: Somme totale des deltas
+          example: "1000.5"
+        min_block_height:
+          type: integer
+          description: Bloc minimum
+          example: 922082
+        max_block_height:
+          type: integer
+          description: Bloc maximum
+          example: 922730
+        unique_addresses:
+          type: integer
+          description: Nombre d'adresses uniques
+          example: 5
+        unique_tickers:
+          type: integer
+          description: Nombre de tickers uniques
+          example: 2
+
+    BalanceChangeAggregateResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BalanceChangeAggregateItem'
+
+    BalanceChangeStatsResponse:
+      type: object
+      properties:
+        total_changes:
+          type: integer
+          description: Nombre total de changements
+          example: 99
+        by_operation_type:
+          type: object
+          description: Nombre de changements par type d'opération
+          additionalProperties:
+            type: integer
+          example:
+            swap_init: 69
+            swap_exe: 15
+            unlock: 15
+        by_action:
+          type: object
+          description: Nombre de changements par action
+          additionalProperties:
+            type: integer
+        by_pool:
+          type: object
+          description: Nombre de changements par pool
+          additionalProperties:
+            type: integer
+        total_volume:
+          type: string
+          description: Volume total (somme des crédits)
+          example: "123456.78900000"
+        period_start_block:
+          type: integer
+          nullable: true
+          description: Premier bloc
+          example: 922082
+        period_end_block:
+          type: integer
+          nullable: true
+          description: Dernier bloc
+          example: 922730
+        unique_addresses:
+          type: integer
+          description: Nombre d'adresses uniques
+          example: 22
+        unique_tickers:
+          type: integer
+          description: Nombre de tickers uniques
+          example: 5
+        unique_pools:
+          type: integer
+          description: Nombre de pools uniques
+          example: 7
+
+    BalanceChangeVerifyResponse:
+      type: object
+      properties:
+        identifier:
+          type: string
+          description: Identifiant vérifié (txid ou operation_id)
+          example: "txid=abcdef..."
+        found:
+          type: boolean
+          description: Si des changements ont été trouvés
+          example: true
+        total_changes:
+          type: integer
+          nullable: true
+          description: Nombre total de changements vérifiés
+          example: 6
+        errors:
+          type: array
+          description: Liste des erreurs de cohérence détectées
+          items:
+            type: object
+            additionalProperties: true
+        warnings:
+          type: array
+          description: Liste des avertissements
+          items:
+            type: object
+            additionalProperties: true
+        address_ticker_deltas:
+          type: object
+          nullable: true
+          description: Deltas agrégés par adresse+ticker
+          additionalProperties:
+            type: string
+        pool_deltas:
+          type: object
+          nullable: true
+          description: Deltas agrégés par pool
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: string
+        deploy_deltas:
+          type: object
+          nullable: true
+          description: Deltas agrégés par deploy
+          additionalProperties:
+            type: string
+
+paths:
+  /:
+    get:
+      summary: Information de base sur l'API
+      description: Récupère des informations de base sur l'API Simplicity
+      operationId: getRoot
+      security: []  # Pas besoin d'authentification
+      responses:
+        '200':
+          description: Information de base sur l'API
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Universal BRC-20 Indexer API"
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /health/concurrency:
+    get:
+      summary: Vérification de la santé de la concurrence
+      description: Vérifie l'état de santé de la concurrence de l'indexeur
+      operationId: getConcurrencyHealth
+      security: []  # Pas besoin d'authentification
+      responses:
+        '200':
+          description: État de santé de la concurrence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConcurrencyHealthResponse'
+
+  # Endpoints BRC-20
+  /v1/indexer/brc20/health:
+    get:
+      summary: Vérification de l'état de santé
+      description: Vérifie l'état de santé de l'indexeur BRC-20
+      operationId: getBrc20Health
+      security: []  # Pas besoin d'authentification
+      responses:
+        '200':
+          description: État de santé de l'indexeur
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, warning, error]
+                    example: "healthy"
+                  message:
+                    type: string
+                    example: "Universal BRC-20 Indexer API is running"
+
+  /v1/indexer/brc20/status:
+    get:
+      summary: Statut de l'indexeur
+      description: Récupère le statut actuel de l'indexeur BRC-20
+      operationId: getBrc20Status
+      responses:
+        '200':
+          description: Statut de l'indexeur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndexerStatus'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/list:
+    get:
+      summary: Liste des tokens BRC-20
+      description: Récupère la liste des tokens BRC-20 avec pagination
+      operationId: getBrc20List
+      parameters:
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+          example: 100
+      responses:
+        '200':
+          description: Liste des tokens BRC-20
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BRC20InfoItem'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/list/all:
+    get:
+      summary: Liste complète des tokens BRC-20
+      description: Récupère la liste complète des tokens BRC-20 sans pagination
+      operationId: getAllBrc20List
+      parameters:
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+          example: 1000
+      responses:
+        '200':
+          description: Liste complète des tokens BRC-20
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAllResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/{ticker}/info:
+    get:
+      summary: Informations sur un token
+      description: Récupère les informations sur un token BRC-20 spécifique
+      operationId: getTickerInfo
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+      responses:
+        '200':
+          description: Informations sur le token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BRC20InfoItem'
+        '404':
+          description: Token non trouvé
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/{ticker}/holders:
+    get:
+      summary: Détenteurs d'un token
+      description: Récupère la liste des détenteurs d'un token BRC-20 spécifique
+      operationId: getTickerHolders
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+        - name: skip
+          in: query
+          description: Nombre d'enregistrements à sauter
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+          example: 100
+      responses:
+        '200':
+          description: Liste des détenteurs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AddressBalance'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/{ticker}/holders/all:
+    get:
+      summary: Liste complète des détenteurs d'un token
+      description: Récupère la liste complète des détenteurs d'un token BRC-20 spécifique, sans limite de pagination.
+      operationId: getAllTickerHolders
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+      responses:
+        '200':
+          description: Liste complète des détenteurs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GetAllResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/AddressBalance'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/{ticker}/history:
+    get:
+      summary: Historique d'un token
+      description: Récupère l'historique des opérations pour un token BRC-20 spécifique.
+      operationId: getTickerHistory
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+        - name: skip
+          in: query
+          description: Nombre d'enregistrements à sauter pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Historique des opérations du token
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/history/all:
+    get:
+      summary: Historique complet d'un token
+      description: Récupère l'historique complet des opérations pour un token BRC-20, sans limite de pagination.
+      operationId: getAllTickerHistory
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+        - name: op_type
+          in: query
+          description: "Filtrer par type d'opération (e.g., 'mint', 'transfer')"
+          schema:
+            type: string
+            nullable: true
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+        - name: include_invalid
+          in: query
+          description: Inclure les opérations invalides
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Historique complet des opérations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GetAllResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/{ticker}/tx/{txid}/history:
+    get:
+      summary: Historique d'une transaction pour un token
+      description: Récupère les opérations BRC-20 spécifiques à un ticker contenues dans une transaction donnée.
+      operationId: getTickerTxHistory
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+        - name: txid
+          in: path
+          required: true
+          description: ID de la transaction
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Liste des opérations pour la transaction
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/history-by-height/{height}:
+    get:
+      summary: Historique par hauteur de bloc
+      description: Récupère l'historique des opérations BRC-20 pour une hauteur de bloc spécifique.
+      operationId: getHistoryByHeight
+      parameters:
+        - name: height
+          in: path
+          required: true
+          description: Hauteur du bloc
+          schema:
+            type: integer
+          example: 919100
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+        - name: skip
+          in: query
+          description: Nombre d'enregistrements à sauter pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Historique des opérations pour le bloc
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/brc20/history-by-height/{height}/all:
+    get:
+      summary: Historique complet par hauteur de bloc
+      description: Récupère l'historique complet des opérations BRC-20 pour une hauteur de bloc, sans pagination.
+      operationId: getAllHistoryByHeight
+      parameters:
+        - name: height
+          in: path
+          required: true
+          description: Hauteur du bloc
+          schema:
+            type: integer
+          example: 919100
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+        - name: include_invalid
+          in: query
+          description: Inclure les opérations invalides
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Historique complet pour le bloc
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GetAllResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/address/{address}/brc20/{ticker}/info:
+    get:
+      summary: Solde d'un token pour une adresse
+      description: Récupère le solde d'un token BRC-20 spécifique pour une adresse donnée.
+      operationId: getAddressTickerBalance
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Adresse Bitcoin
+          schema:
+            type: string
+          example: "bc1p9s8jywvdavsqlxq9f0yvhcarshda4su87tgt5hu29rze07plykcqrrawtf"
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+      responses:
+        '200':
+          description: Solde du token pour l'adresse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressBalance'
+        '404':
+          description: Adresse ou token non trouvé
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/address/{address}/history:
+    get:
+      summary: Historique général d'une adresse
+      description: Récupère l'historique des opérations BRC-20 pour une adresse, avec filtres optionnels.
+      operationId: getAddressHistoryGeneral
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Adresse Bitcoin
+          schema:
+            type: string
+        - name: ticker
+          in: query
+          description: Filtrer par ticker
+          schema:
+            type: string
+            nullable: true
+        - name: op_type
+          in: query
+          description: "Filtrer par type d'opération"
+          schema:
+            type: string
+            nullable: true
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+      responses:
+        '200':
+          description: Historique de l'adresse
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/address/{address}/history/all:
+    get:
+      summary: Historique complet d'une adresse
+      description: Récupère l'historique complet des opérations BRC-20 pour une adresse, sans pagination.
+      operationId: getAllAddressHistory
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Adresse Bitcoin
+          schema:
+            type: string
+        - name: ticker
+          in: query
+          description: Filtrer par ticker
+          schema:
+            type: string
+            nullable: true
+        - name: op_type
+          in: query
+          description: "Filtrer par type d'opération"
+          schema:
+            type: string
+            nullable: true
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+        - name: include_invalid
+          in: query
+          description: Inclure les opérations invalides
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Historique complet de l'adresse
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GetAllResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/address/{address}/brc20/{ticker}/history:
+    get:
+      summary: Historique d'un token pour une adresse
+      description: Récupère l'historique des opérations pour un ticker et une adresse spécifiques.
+      operationId: getAddressTickerHistory
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Adresse Bitcoin
+          schema:
+            type: string
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+        - name: op_type
+          in: query
+          description: "Filtrer par type d'opération"
+          schema:
+            type: string
+            nullable: true
+        - name: skip
+          in: query
+          description: Nombre d'enregistrements à sauter
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+      responses:
+        '200':
+          description: Historique pour l'adresse et le ticker
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/address/{address}/brc20/{ticker}/history/all:
+    get:
+      summary: Historique complet d'un token pour une adresse
+      description: Récupère l'historique complet des opérations pour un ticker et une adresse, sans pagination.
+      operationId: getAllAddressTickerHistory
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Adresse Bitcoin
+          schema:
+            type: string
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+        - name: op_type
+          in: query
+          description: "Filtrer par type d'opération"
+          schema:
+            type: string
+            nullable: true
+        - name: max_results
+          in: query
+          description: Nombre maximum de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            nullable: true
+        - name: include_invalid
+          in: query
+          description: Inclure les opérations invalides
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Historique complet pour l'adresse et le ticker
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GetAllResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Op'
+        '500':
+          description: Erreur interne du serveur
+
+  # Endpoints pour le mempool
+  /v1/mempool/check-pending:
+    post:
+      summary: Vérifier les transferts en attente
+      description: Vérifie si une adresse a des transferts BRC-20 en attente pour un ticker spécifique
+      operationId: checkAddressPending
+      security: []  # Pas besoin d'authentification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Résultat de la vérification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  # Endpoints pour les validations Wrap
+  /v1/validator/validate-wrap-mint:
+    post:
+      summary: Valider une opération de mint Wrap
+      description: |
+        Valide une opération de mint de token Wrap à partir d'une transaction brute.
+        Effectue une validation cryptographique complète des opérations de mint de token Wrap (W).
+      operationId: validateWrapMint
+      security: []  # Pas besoin d'authentification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateWrapMintRequest'
+      responses:
+        '200':
+          description: Résultat de la validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateWrapMintResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/validator/validate-address-from-witness:
+    post:
+      summary: Valider une adresse depuis la witness
+      description: Valide la recalculation d'une adresse Taproot à partir des données de la witness d'une transaction.
+      operationId: validateAddressFromWitness
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateAddressRequest'
+      responses:
+        '200':
+          description: Résultat de la validation d'adresse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateAddressResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/validator/health:
+    get:
+      summary: Vérification de l'état du service de validation
+      description: Vérifie l'état de santé du service de validation
+      operationId: validationHealth
+      security: []  # Pas besoin d'authentification
+      responses:
+        '200':
+          description: État de santé du service de validation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, warning, error]
+                    example: "healthy"
+                  service:
+                    type: string
+                    example: "WrapValidatorService"
+                  version:
+                    type: string
+                    example: "1.0.0"
+        '500':
+          description: Service de validation non sain
+
+  # Endpoints Swap
+  /v1/indexer/swap/positions:
+    get:
+      summary: Liste des positions de swap
+      description: Récupère la liste des positions de swap avec différents filtres
+      operationId: listPositions
+      tags:
+        - Swap
+      parameters:
+        - name: owner
+          in: query
+          description: Filtrer par propriétaire
+          schema:
+            type: string
+          example: "bc1q..."
+        - name: src
+          in: query
+          description: Filtrer par ticker source
+          schema:
+            type: string
+          example: "W"
+        - name: dst
+          in: query
+          description: Filtrer par ticker de destination
+          schema:
+            type: string
+          example: "WTF"
+        - name: status
+          in: query
+          description: Filtrer par état
+          schema:
+            type: string
+          example: "active"
+        - name: unlock_height_lte
+          in: query
+          description: Filtrer par hauteur de déverrouillage inférieure ou égale à
+          schema:
+            type: integer
+          example: 896000
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          example: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des positions de swap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/tvl/{ticker}:
+    get:
+      summary: TVL d'un ticker dans le swap
+      description: Récupère la valeur totale verrouillée (TVL) pour un ticker spécifique dans le module de swap.
+      operationId: getSwapTvlForTicker
+      tags:
+        - Swap
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          description: BRC-20 token symbol
+          schema:
+            type: string
+          example: "W"
+      responses:
+        '200':
+          description: TVL pour le ticker
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TvlResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/pools:
+    get:
+      summary: Liste des pools de swap
+      description: Récupère la liste des pools de swap disponibles.
+      operationId: listPools
+      tags:
+        - Swap
+      parameters:
+        - name: src
+          in: query
+          description: Filtrer par ticker source
+          schema:
+            type: string
+            nullable: true
+        - name: dst
+          in: query
+          description: Filtrer par ticker de destination
+          schema:
+            type: string
+            nullable: true
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des pools de swap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/pools/{pool_id}/reserves:
+    get:
+      summary: Réserves d'un pool de swap
+      description: |
+        Récupère les réserves exactes d'un pool de swap calculées depuis les positions actives.
+        
+        Les réserves sont calculées dynamiquement :
+        - reserve_a = SUM(amount_locked WHERE pool_id=X AND src_ticker=token_a AND status='active')
+        - reserve_b = SUM(amount_locked WHERE pool_id=X AND src_ticker=token_b AND status='active')
+        
+        Ces réserves sont utilisées pour le calcul AMM (constant product) lors des swaps.
+      operationId: getPoolReserves
+      tags:
+        - Swap
+      parameters:
+        - name: pool_id
+          in: path
+          required: true
+          description: "ID canonique du pool (trié alphabétiquement, ex: 'LOL-WTF' et non 'WTF-LOL')"
+          schema:
+            type: string
+          example: "LOL-WTF"
+      responses:
+        '200':
+          description: Réserves du pool
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolReservesResponse'
+        '404':
+          description: Pool non trouvé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: "Pool LOL-WTF not found"
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/quote:
+    get:
+      summary: Estimation de swap (quote)
+      description: |
+        Calcule le montant exact de tokens DST attendu pour un swap donné, sans l'exécuter.
+        
+        Cet endpoint simule un swap sans l'exécuter, permettant au frontend de :
+        - Afficher le montant exact de tokens DST attendu
+        - Montrer l'impact du slippage
+        - Afficher le price impact (impact sur le prix du pool)
+        - Valider si le swap est réalisable avant de générer le JSON OP_RETURN
+        - Afficher si le swap sera partiellement rempli (partial fill)
+      operationId: getSwapQuote
+      tags:
+        - Swap
+      parameters:
+        - name: src
+          in: query
+          required: true
+          description: Ticker du token source (celui qu'on swap)
+          schema:
+            type: string
+          example: "LOL"
+        - name: dst
+          in: query
+          required: true
+          description: Ticker du token destination (celui qu'on reçoit)
+          schema:
+            type: string
+          example: "WTF"
+        - name: amount
+          in: query
+          required: true
+          description: Montant de tokens source à swapper (format décimal)
+          schema:
+            type: string
+          example: "100.5"
+        - name: slippage
+          in: query
+          required: true
+          description: Tolérance au slippage (0-100, ex: "1" pour 1%)
+          schema:
+            type: string
+          example: "1"
+      responses:
+        '200':
+          description: Estimation de swap avec tous les détails de calcul
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwapQuoteResponse'
+        '400':
+          description: Requête invalide (tickers identiques, montant invalide, slippage hors limites, liquidité insuffisante)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: "Amount must be positive"
+        '404':
+          description: Pool non trouvé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: "Pool LOL-WTF not found. Make sure both LOL and WTF have active positions."
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/pools/{pool_id}/transactions:
+    get:
+      summary: Transactions récentes d'un pool (agrégées)
+      description: |
+        Retourne les transactions récentes d'un pool, agrégées par txid pour l'affichage.
+        
+        Focus sur les données récentes (20-100 dernières transactions) avec pagination.
+        Le volume et les fees sont séparés par ticker (token_a et token_b).
+      operationId: getPoolTransactions
+      tags:
+        - Swap
+      parameters:
+        - name: pool_id
+          in: path
+          required: true
+          description: "ID canonique du pool (trié alphabétiquement, ex: 'LOL-WTF')"
+          schema:
+            type: string
+          example: "LOL-WTF"
+        - name: operation_type
+          in: query
+          description: Filtrer par type d'opération
+          schema:
+            type: string
+            enum: [swap_init, swap_exe, unlock]
+            nullable: true
+          example: "swap_exe"
+        - name: limit
+          in: query
+          description: Nombre de transactions à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: Liste des transactions agrégées
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolTransactionsResponse'
+        '400':
+          description: Pool ID invalide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: "Invalid pool_id format: LOL-WTF"
+        '404':
+          description: Pool non trouvé
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/positions/{position_id}:
+    get:
+      summary: Détails d'une position de swap
+      description: Récupère les détails d'une position de swap spécifique par son ID.
+      operationId: getPositionById
+      tags:
+        - Swap
+      parameters:
+        - name: position_id
+          in: path
+          required: true
+          description: ID de la position de swap
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Détails de la position de swap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwapPositionItem'
+        '404':
+          description: Position non trouvée
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/owner/{owner}/positions:
+    get:
+      summary: Lister les positions d'un propriétaire
+      description: Récupère la liste des positions de swap pour une adresse propriétaire spécifique.
+      operationId: listOwnerPositions
+      tags:
+        - Swap
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          description: Adresse du propriétaire
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filtrer par état
+          schema:
+            type: string
+            enum: [active, expired, closed]
+            nullable: true
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des positions du propriétaire
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/expiring:
+    get:
+      summary: Lister les positions arrivant à expiration
+      description: Récupère les positions de swap qui expirent à une hauteur de bloc donnée ou avant.
+      operationId: listExpiringPositions
+      tags:
+        - Swap
+      parameters:
+        - name: height_lte
+          in: query
+          required: true
+          description: "Hauteur de bloc maximale pour l'expiration"
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des positions expirant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/executions:
+    get:
+      summary: Liste des exécutions swap.exe
+      description: Récupère la liste des opérations swap.exe (exécutions de positions)
+      operationId: listExecutions
+      tags:
+        - Swap
+      parameters:
+        - name: executor
+          in: query
+          description: Filtrer par adresse exécutrice
+          schema:
+            type: string
+            nullable: true
+          example: "bc1q..."
+        - name: src
+          in: query
+          description: Filtrer par ticker source
+          schema:
+            type: string
+            nullable: true
+          example: "W"
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          example: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: Liste des exécutions swap.exe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/executions/{execution_id}:
+    get:
+      summary: Détails d'une exécution swap.exe
+      description: Récupère les détails d'une exécution swap.exe spécifique par son ID d'opération
+      operationId: getExecutionById
+      tags:
+        - Swap
+      parameters:
+        - name: execution_id
+          in: path
+          required: true
+          description: ID de l'opération d'exécution
+          schema:
+            type: integer
+          example: 12345
+      responses:
+        '200':
+          description: Détails de l'exécution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwapExecutionItem'
+        '404':
+          description: Exécution non trouvée
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/metrics/global:
+    get:
+      summary: Statistiques globales du swap
+      description: Récupère les statistiques globales du système de swap
+      operationId: getGlobalMetrics
+      tags:
+        - Swap Metrics
+      responses:
+        '200':
+          description: Statistiques globales
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalStatsResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/metrics/timeseries:
+    get:
+      summary: Statistiques temporelles
+      description: Récupère des statistiques agrégées par jour pour les N derniers jours
+      operationId: getTimeseriesMetrics
+      tags:
+        - Swap Metrics
+      parameters:
+        - name: days
+          in: query
+          description: Nombre de jours à analyser
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 7
+          example: 7
+      responses:
+        '200':
+          description: Statistiques temporelles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeSeriesResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/metrics/top-executors:
+    get:
+      summary: Top exécuteurs par volume
+      description: Récupère les meilleurs exécuteurs par volume total
+      operationId: getTopExecutors
+      tags:
+        - Swap Metrics
+      parameters:
+        - name: limit
+          in: query
+          description: Nombre de résultats à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: Liste des top exécuteurs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopExecutorsResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/metrics/fill-rate:
+    get:
+      summary: Statistiques de taux de remplissage
+      description: Récupère des statistiques sur le taux de remplissage des positions
+      operationId: getFillRateStats
+      tags:
+        - Swap Metrics
+      responses:
+        '200':
+          description: Statistiques de taux de remplissage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillRateStatsResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  # Endpoints Balance Changes
+  /v1/indexer/swap/balance-changes:
+    get:
+      summary: Liste des changements de balance
+      description: Récupère la liste des changements de balance avec filtres et pagination
+      operationId: listBalanceChanges
+      tags:
+        - Swap
+      parameters:
+        - name: address
+          in: query
+          description: "Filtrer par adresse (incluant POOL:: et DEPLOY::)"
+          schema:
+            type: string
+          example: "bc1q..."
+        - name: ticker
+          in: query
+          description: Filtrer par ticker
+          schema:
+            type: string
+          example: "W"
+        - name: operation_type
+          in: query
+          description: Filtrer par type d'opération (swap_init, swap_exe, unlock)
+          schema:
+            type: string
+            enum: [swap_init, swap_exe, unlock]
+          example: "swap_init"
+        - name: action
+          in: query
+          description: Filtrer par action
+          schema:
+            type: string
+          example: "debit_user_balance"
+        - name: pool_id
+          in: query
+          description: Filtrer par pool ID
+          schema:
+            type: string
+          example: "LOL-WTF"
+        - name: swap_position_id
+          in: query
+          description: Filtrer par position ID
+          schema:
+            type: integer
+          example: 14
+        - name: operation_id
+          in: query
+          description: Filtrer par opération BRC-20 ID
+          schema:
+            type: integer
+          example: 12345
+        - name: txid
+          in: query
+          description: Filtrer par transaction ID
+          schema:
+            type: string
+          example: "abcdef123456..."
+        - name: block_height_min
+          in: query
+          description: Bloc minimum
+          schema:
+            type: integer
+          example: 922082
+        - name: block_height_max
+          in: query
+          description: Bloc maximum
+          schema:
+            type: integer
+          example: 922730
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          example: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: Liste des changements de balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/{change_id}:
+    get:
+      summary: Détails d'un changement de balance
+      description: Récupère les détails d'un changement de balance spécifique par son ID
+      operationId: getBalanceChange
+      tags:
+        - Swap
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          description: ID du changement de balance
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Détails du changement de balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeItem'
+        '404':
+          description: Changement non trouvé
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/tx/{txid}:
+    get:
+      summary: Changements par transaction
+      description: Récupère tous les changements de balance pour une transaction spécifique
+      operationId: getBalanceChangesByTxid
+      tags:
+        - Swap
+      parameters:
+        - name: txid
+          in: path
+          required: true
+          description: ID de transaction Bitcoin
+          schema:
+            type: string
+          example: "abcdef123456..."
+      responses:
+        '200':
+          description: Liste des changements pour la transaction
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BalanceChangeItem'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/position/{position_id}:
+    get:
+      summary: Changements par position
+      description: Récupère tous les changements de balance liés à une position de swap
+      operationId: getBalanceChangesByPosition
+      tags:
+        - Swap
+      parameters:
+        - name: position_id
+          in: path
+          required: true
+          description: ID de la position de swap
+          schema:
+            type: integer
+          example: 14
+      responses:
+        '200':
+          description: Liste des changements pour la position
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BalanceChangeItem'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/operation/{operation_id}:
+    get:
+      summary: Changements par opération BRC-20
+      description: Récupère tous les changements de balance liés à une opération BRC-20
+      operationId: getBalanceChangesByOperation
+      tags:
+        - Swap
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          description: ID de l'opération BRC-20
+          schema:
+            type: integer
+          example: 12345
+      responses:
+        '200':
+          description: Liste des changements pour l'opération
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BalanceChangeItem'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/address/{address}:
+    get:
+      summary: Historique d'une adresse
+      description: Récupère l'historique des changements de balance pour une adresse
+      operationId: getBalanceChangesByAddress
+      tags:
+        - Swap
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: "Adresse Bitcoin (incluant POOL:: et DEPLOY::)"
+          schema:
+            type: string
+          example: "bc1q..."
+        - name: ticker
+          in: query
+          description: Filtrer par ticker
+          schema:
+            type: string
+          example: "W"
+        - name: operation_type
+          in: query
+          description: Filtrer par type d'opération
+          schema:
+            type: string
+            enum: [swap_init, swap_exe, unlock]
+        - name: action
+          in: query
+          description: Filtrer par action
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Historique des changements pour l'adresse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/aggregate:
+    get:
+      summary: Agrégation des changements
+      description: Agrège les changements de balance par groupe spécifié
+      operationId: aggregateBalanceChanges
+      tags:
+        - Swap
+      parameters:
+        - name: address
+          in: query
+          description: Filtrer par adresse
+          schema:
+            type: string
+        - name: ticker
+          in: query
+          description: Filtrer par ticker
+          schema:
+            type: string
+        - name: operation_type
+          in: query
+          description: Filtrer par type d'opération
+          schema:
+            type: string
+            enum: [swap_init, swap_exe, unlock]
+        - name: action
+          in: query
+          description: Filtrer par action
+          schema:
+            type: string
+        - name: group_by
+          in: query
+          description: Grouper par (address, ticker, operation_type, action, pool_id)
+          schema:
+            type: string
+            enum: [address, ticker, operation_type, action, pool_id]
+            default: address
+          example: "address"
+      responses:
+        '200':
+          description: Résultats agrégés
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeAggregateResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/stats:
+    get:
+      summary: Statistiques globales
+      description: Récupère les statistiques globales sur les changements de balance
+      operationId: getBalanceChangesStats
+      tags:
+        - Swap
+      responses:
+        '200':
+          description: Statistiques globales
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeStatsResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/verify/tx/{txid}:
+    get:
+      summary: Vérifier la cohérence d'une transaction
+      description: Vérifie la cohérence des changements de balance pour une transaction
+      operationId: verifyBalanceChangesTxid
+      tags:
+        - Swap
+      parameters:
+        - name: txid
+          in: path
+          required: true
+          description: ID de transaction Bitcoin
+          schema:
+            type: string
+          example: "abcdef123456..."
+      responses:
+        '200':
+          description: Résultat de la vérification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeVerifyResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/verify/operation/{operation_id}:
+    get:
+      summary: Vérifier la cohérence d'une opération
+      description: Vérifie la cohérence des changements de balance pour une opération BRC-20
+      operationId: verifyBalanceChangesOperation
+      tags:
+        - Swap
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          description: ID de l'opération BRC-20
+          schema:
+            type: integer
+          example: 12345
+      responses:
+        '200':
+          description: Résultat de la vérification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeVerifyResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/swap/balance-changes/pool/{pool_id}:
+    get:
+      summary: Changements par pool
+      description: Récupère tous les changements de balance pour un pool spécifique
+      operationId: getBalanceChangesByPool
+      tags:
+        - Swap
+      parameters:
+        - name: pool_id
+          in: path
+          required: true
+          description: "ID canonique du pool"
+          schema:
+            type: string
+          example: "LOL-WTF"
+        - name: operation_type
+          in: query
+          description: Filtrer par type d'opération
+          schema:
+            type: string
+            enum: [swap_init, swap_exe, unlock]
+        - name: action
+          in: query
+          description: Filtrer par action
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des changements pour la pool
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceChangeListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  # Endpoints Wrap
+  /v1/indexer/w/contracts:
+    get:
+      summary: Liste des contrats Wrap
+      description: Récupère la liste des contrats Wrap avec différents filtres
+      operationId: listContracts
+      tags:
+        - Wrap
+      parameters:
+        - name: status
+          in: query
+          description: Filtrer par état
+          schema:
+            type: string
+          example: "active"
+        - name: owner
+          in: query
+          description: Filtrer par propriétaire
+          schema:
+            type: string
+          example: "bc1q..."
+        - name: limit
+          in: query
+          description: Nombre maximum d'enregistrements à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          example: 100
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+      responses:
+        '200':
+          description: Liste des contrats Wrap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractListResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/w/contracts/{script_address}:
+    get:
+      summary: Détails d'un contrat Wrap
+      description: Récupère les détails d'un contrat Wrap spécifique
+      operationId: getContract
+      tags:
+        - Wrap
+      parameters:
+        - name: script_address
+          in: path
+          required: true
+          description: Adresse du script du contrat
+          schema:
+            type: string
+          example: "bc1p..."
+      responses:
+        '200':
+          description: Détails du contrat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractItem'
+        '404':
+          description: Contrat non trouvé
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/w/tvl:
+    get:
+      summary: TVL Wrap
+      description: Récupère la valeur totale verrouillée (TVL) des tokens Wrap
+      operationId: getTvl
+      tags:
+        - Wrap
+      responses:
+        '200':
+          description: TVL Wrap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WTVLResponse'
+        '500':
+          description: Erreur interne du serveur
+
+  /v1/indexer/w/metrics:
+    get:
+      summary: Métriques Wrap
+      description: Récupère les métriques des contrats Wrap
+      operationId: getMetrics
+      tags:
+        - Wrap
+      responses:
+        '200':
+          description: Métriques des contrats Wrap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WMetricsResponse'
+        '500':
+          description: Erreur interne du serveur

@@ -4,6 +4,7 @@ Provides public API endpoints for validating Wrap Token mint operations
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from typing import Dict, Any
 import structlog
 
 from src.services.wrap_validator_service import WrapValidatorService
@@ -49,15 +50,11 @@ async def validate_wrap_mint_endpoint(
     try:
         logger.info("Wrap mint validation requested", raw_tx_hex_length=len(request.raw_tx_hex))
 
+        # Initialize validator service
         validator_service = WrapValidatorService(rpc)
 
-        try:
-            tx_obj = rpc.decode_raw_transaction(request.raw_tx_hex)
-        except Exception as e:
-            logger.error("Failed to decode raw transaction hex", error=str(e), exc_info=True)
-            raise HTTPException(status_code=400, detail=f"Invalid raw transaction hex: {e}")
-
-        result = validator_service.validate_from_tx_obj(tx_obj, {})  # Pass empty op_data for this endpoint
+        # Perform validation
+        result = validator_service.validate_mint_operation(request.raw_tx_hex)
 
         logger.info(
             "Wrap mint validation completed",
@@ -65,17 +62,40 @@ async def validate_wrap_mint_endpoint(
             reason=result.error_message if not result.is_valid else "VALID",
         )
 
+        # Convert ValidationResult to API response format
         if result.is_valid:
-            crypto_data = result.additional_data.get("crypto_data", {}) if result.additional_data else {}
+            # The required details are in the `additional_data` dictionary returned by the service
+            details_data = result.additional_data if result.additional_data else {}
             details = ValidationDetails(
-                expected_address=crypto_data.get("expected_address"),
-                found_address=crypto_data.get("found_address"),
-                expected_amount_sats=crypto_data.get("expected_amount_sats"),
-                found_amount_sats=crypto_data.get("found_amount_sats"),
+                expected_address=details_data.get("expected_address"),  # This key might not be available directly
+                found_address=details_data.get("address"),
+                expected_amount_sats=details_data.get("expected_amount_sats"),  # This key might not be available
+                found_amount_sats=details_data.get("amount_sats"),
             )
             return ValidateWrapMintResponse(is_valid=True, reason="VALID", details=details)
         else:
-            return ValidateWrapMintResponse(is_valid=False, reason=result.error_message, details=None)
+            # Extract details from additional_data if available
+            details_data = result.additional_data if result.additional_data else {}
+            details = None
+
+            # Try to extract expected/found addresses from different possible structures
+            if "expected" in details_data and "found" in details_data:
+                details = ValidationDetails(
+                    expected_address=details_data.get("expected"),
+                    found_address=details_data.get("found"),
+                    expected_amount_sats=details_data.get("expected_amount_sats"),
+                    found_amount_sats=details_data.get("found_amount_sats"),
+                )
+            elif "details" in details_data:
+                details_dict = details_data.get("details", {})
+                details = ValidationDetails(
+                    expected_address=details_dict.get("expected_address") or details_dict.get("expected"),
+                    found_address=details_dict.get("found_address") or details_dict.get("found"),
+                    expected_amount_sats=details_dict.get("expected_amount_sats"),
+                    found_amount_sats=details_dict.get("found_amount_sats"),
+                )
+
+            return ValidateWrapMintResponse(is_valid=False, reason=result.error_message, details=details)
 
     except Exception as e:
         logger.error(
@@ -112,8 +132,10 @@ async def validate_address_from_witness_endpoint(
     try:
         logger.info("Address validation from witness requested", raw_tx_hex_length=len(request.raw_tx_hex))
 
+        # Initialize validator service
         validator_service = WrapValidatorService(rpc)
 
+        # Perform address validation
         result = validator_service.validate_address_from_witness(request.raw_tx_hex)
 
         logger.info(
@@ -122,13 +144,14 @@ async def validate_address_from_witness_endpoint(
             reason=result.error_message if not result.is_valid else "VALID",
         )
 
+        # Convert ValidationResult to API response format
         if result.is_valid and result.additional_data:
             details = result.additional_data.get("details", {})
             crypto_data = result.additional_data.get("crypto_data", {})
 
             crypto_details = CryptoDetails(
                 alice_pubkey_xonly=crypto_data.get("alice_pubkey_xonly", ""),
-                OPERATOR_PUBKEY_xonly=crypto_data.get("OPERATOR_PUBKEY_xonly", ""),
+                platform_pubkey_xonly=crypto_data.get("platform_pubkey_xonly", ""),
                 internal_key_xonly=crypto_data.get("internal_key_xonly", ""),
                 csv_blocks=crypto_data.get("csv_blocks", 0),
                 multisig_script=crypto_data.get("multisig_script", ""),
@@ -171,9 +194,10 @@ async def validation_health(rpc: BitcoinRPCService = Depends(get_bitcoin_rpc)):
     Health check endpoint for validation service.
 
     Returns:
-        dict with service status
+        Dict with service status
     """
     try:
+        # Test validator service initialization
         validator_service = WrapValidatorService(rpc)
 
         return {"status": "healthy", "service": "WrapValidatorService", "version": "1.0.0"}

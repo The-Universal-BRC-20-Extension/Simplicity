@@ -1,0 +1,960 @@
+from sqlalchemy.orm import Session
+from sqlalchemy import func, and_, or_
+from typing import Dict, List, Optional
+from decimal import Decimal
+import structlog
+
+from src.models.deploy import Deploy
+from src.models.balance import Balance
+from src.models.transaction import BRC20Operation
+from src.models.block import ProcessedBlock
+from src.models.swap_position import SwapPosition, SwapPositionStatus
+from src.utils.amounts import compare_amounts
+from src.api.models import Op
+
+logger = structlog.get_logger()
+
+
+class BRC20CalculationService:
+    """Calculate statistics for BRC-20 tickers"""
+
+    def __init__(self, db_session: Session):
+        self.db = db_session
+
+    def get_all_tickers_with_stats(self, start: int = 0, size: int = 50) -> Dict:
+        try:
+            query = self.db.query(Deploy).order_by(Deploy.deploy_height.desc())
+            total = query.count()
+            deploys = query.offset(start).limit(size).all()
+
+            ticker_data = []
+            for deploy in deploys:
+                stats = self._calculate_ticker_stats(deploy)
+                if stats:
+                    ticker_data.append(stats)
+
+            return {"total": total, "start": start, "size": size, "data": ticker_data}
+        except Exception as e:
+            logger.error("Failed to get tickers", error=str(e))
+            raise
+
+    def get_ticker_stats(self, ticker: str) -> Optional[Dict]:
+        try:
+            normalized_ticker = ticker.upper()
+
+            deploy = self.db.query(Deploy).filter(Deploy.ticker == normalized_ticker).first()
+
+            if not deploy:
+                return None
+
+            return self._calculate_ticker_stats(deploy)
+
+        except Exception as e:
+            logger.error("Failed to get ticker stats", ticker=ticker, error=str(e))
+            raise
+
+    def _calculate_ticker_stats(self, deploy: Deploy) -> Dict:
+        # Calculate current supply from balances (for holders count and display)
+        current_supply = (
+            self.db.query(func.coalesce(func.sum(Balance.balance), 0))
+            .filter(Balance.ticker == deploy.ticker, Balance.balance != 0)
+            .scalar()
+            or 0
+        )
+
+        # Calculate total minted from mint operations (for accurate minted count)
+        total_minted = (
+            self.db.query(func.coalesce(func.sum(BRC20Operation.amount), 0))
+            .filter(
+                BRC20Operation.ticker == deploy.ticker,
+                BRC20Operation.operation == "mint",
+                BRC20Operation.is_valid == True,
+            )
+            .scalar()
+            or 0
+        )
+
+        holder_count = self.db.query(Balance).filter(Balance.ticker == deploy.ticker, Balance.balance != 0).count()
+
+        # Calculate total locked in active swap positions
+        # amount_locked represents the amount of src_ticker that is locked
+        # So we only need to sum positions where src_ticker = deploy.ticker
+        total_locked = (
+            self.db.query(func.coalesce(func.sum(SwapPosition.amount_locked), 0))
+            .filter(SwapPosition.src_ticker == deploy.ticker, SwapPosition.status == "active")
+            .scalar()
+            or 0
+        )
+
+        total_locked = float(total_locked)
+
+        # Use total_minted for is_completed check (not current_supply which may include excess)
+        is_completed = compare_amounts(str(total_minted), deploy.max_supply) >= 0
+
+        # Calculate circulating supply: total_supply - locked
+        # For full mint tokens: circulating_supply = max_supply - total_locked
+        # For tokens with remaining mints: circulating_supply = current_supply - total_locked
+        if is_completed:
+            # Token is full mint: circulating = max_supply - total_locked
+            circulating_supply = float(deploy.max_supply) - total_locked
+        else:
+            # Token not full mint: circulating = current_supply - total_locked
+            circulating_supply = float(current_supply) - total_locked
+
+        # Ensure circulating_supply is not negative
+        circulating_supply = max(0, circulating_supply)
+
+        return {
+            "tick": deploy.ticker,
+            "max": deploy.max_supply,
+            "max_supply": deploy.max_supply,
+            "remaining_supply": str(deploy.remaining_supply) if deploy.remaining_supply is not None else None,
+            "limit": deploy.limit_per_op,
+            "minted": str(total_minted),  # Use total_minted from operations, not sum of balances
+            "current_supply": str(current_supply),  # Add current_supply (sum of balances) for reference
+            "total_locked": str(total_locked),  # Total locked in active swap positions
+            "circulating_supply": str(circulating_supply),  # Tokens available on market (not locked)
+            "holders": holder_count,
+            "deploy_txid": deploy.deploy_txid,
+            "deploy_height": deploy.deploy_height,
+            "deploy_time": int(deploy.deploy_timestamp.timestamp()),
+            "deployer": deploy.deployer_address or "",
+            "is_completed": is_completed,
+            "decimals": 9,
+        }
+
+    def get_ticker_holders(self, ticker: str, start: int = 0, size: int = 50) -> Dict:
+        try:
+            normalized_ticker = ticker.upper()
+
+            query = (
+                self.db.query(Balance)
+                .filter(Balance.ticker == normalized_ticker, Balance.balance != 0)
+                .order_by(Balance.balance.desc())
+            )
+
+            total = query.count()
+            holders = query.offset(start).limit(size).all()
+
+            holder_addresses = [h.address for h in holders]
+            latest_transfers = {}
+
+            if holder_addresses:
+                subquery = (
+                    self.db.query(
+                        BRC20Operation.to_address,
+                        func.max(BRC20Operation.block_height).label("max_height"),
+                    )
+                    .filter(
+                        BRC20Operation.ticker == normalized_ticker,
+                        BRC20Operation.to_address.in_(holder_addresses),
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .group_by(BRC20Operation.to_address)
+                    .subquery()
+                )
+
+                transfers = (
+                    self.db.query(BRC20Operation)
+                    .join(
+                        subquery,
+                        and_(
+                            BRC20Operation.to_address == subquery.c.to_address,
+                            BRC20Operation.block_height == subquery.c.max_height,
+                        ),
+                    )
+                    .filter(
+                        BRC20Operation.ticker == normalized_ticker,
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .all()
+                )
+
+                latest_transfers = {t.to_address: t for t in transfers}
+
+            holder_data = []
+            virtual_data = []
+
+            for holder in holders:
+                transfer = latest_transfers.get(holder.address)
+                holder_data.append(
+                    {
+                        "address": holder.address,
+                        "balance": holder.balance,
+                        "transfer_txid": transfer.txid if transfer else "",
+                        "transfer_height": transfer.block_height if transfer else 0,
+                        "transfer_time": (int(transfer.timestamp.timestamp()) if transfer else 0),
+                    }
+                )
+
+                # Calculate virtual_accounting entry for POOL addresses if partial_amount > 0
+                if holder.address.startswith("POOL::") and not holder.address.startswith("POOL:PARTIAL::"):
+                    # Extract pool_id from address (POOL::LOL-WTF -> LOL-WTF)
+                    pool_id = holder.address.replace("POOL::", "")
+
+                    # Get total locked for this pool and ticker
+                    total_locked_result = (
+                        self.db.query(func.coalesce(func.sum(SwapPosition.amount_locked), 0))
+                        .filter(
+                            SwapPosition.pool_id == pool_id,
+                            SwapPosition.src_ticker == normalized_ticker,
+                            SwapPosition.status == SwapPositionStatus.active,
+                        )
+                        .scalar()
+                    )
+                    total_locked = (
+                        Decimal(str(total_locked_result)) if total_locked_result is not None else Decimal("0")
+                    )
+
+                    # Calculate partial amount
+                    real_balance = Decimal(str(holder.balance))
+                    partial_amount = total_locked - real_balance
+                    if partial_amount > 0:
+                        # Add virtual_accounting entry to separate list
+                        virtual_address = f"POOL:PARTIAL::{pool_id}"
+                        virtual_data.append(
+                            {
+                                "address": virtual_address,
+                                "balance": str(partial_amount),
+                                "transfer_txid": "",
+                                "transfer_height": 0,
+                                "transfer_time": 0,
+                            }
+                        )
+
+            return {
+                "total": total,
+                "start": start,
+                "size": size,
+                "data": holder_data,
+                "virtual_accounting": virtual_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get ticker holders", ticker=ticker, error=str(e))
+            raise
+
+    def get_ticker_transactions(self, ticker: str, start: int = 0, size: int = 100000) -> Dict:
+        try:
+            normalized_ticker = ticker.upper()
+
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    BRC20Operation.ticker == normalized_ticker,
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+            )
+
+            total = query.count()
+            results = query.offset(start).limit(size).all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": start,
+                "size": size,
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get ticker transactions", ticker=ticker, error=str(e))
+            raise
+
+    def get_address_balances(self, address: str, start: int = 0, size: int = 50) -> Dict:
+        try:
+            query = (
+                self.db.query(Balance)
+                .filter(Balance.address == address, Balance.balance != 0)
+                .order_by(Balance.balance.desc())
+            )
+
+            total = query.count()
+            balances = query.offset(start).limit(size).all()
+
+            tickers = [b.ticker for b in balances]
+            latest_transfers = {}
+
+            if tickers:
+                subquery = (
+                    self.db.query(
+                        BRC20Operation.ticker,
+                        func.max(BRC20Operation.block_height).label("max_height"),
+                    )
+                    .filter(
+                        BRC20Operation.to_address == address,
+                        BRC20Operation.ticker.in_(tickers),
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .group_by(BRC20Operation.ticker)
+                    .subquery()
+                )
+
+                transfers = (
+                    self.db.query(BRC20Operation)
+                    .join(
+                        subquery,
+                        and_(
+                            BRC20Operation.ticker == subquery.c.ticker,
+                            BRC20Operation.block_height == subquery.c.max_height,
+                        ),
+                    )
+                    .filter(
+                        BRC20Operation.to_address == address,
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .all()
+                )
+
+                latest_transfers = {t.ticker: t for t in transfers}
+
+            balance_data = []
+            for balance in balances:
+                transfer = latest_transfers.get(balance.ticker)
+                balance_data.append(
+                    {
+                        "tick": balance.ticker,
+                        "balance": balance.balance,
+                        "transfer_txid": transfer.txid if transfer else "",
+                        "transfer_height": transfer.block_height if transfer else 0,
+                        "transfer_time": (int(transfer.timestamp.timestamp()) if transfer else 0),
+                    }
+                )
+
+            return {"total": total, "start": start, "size": size, "data": balance_data}
+
+        except Exception as e:
+            logger.error("Failed to get address balances", address=address, error=str(e))
+            raise
+
+    def get_address_transactions(self, address: str, start: int = 0, size: int = 100000) -> Dict:
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    or_(
+                        BRC20Operation.from_address == address,
+                        BRC20Operation.to_address == address,
+                    ),
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+            )
+
+            total = query.count()
+            results = query.offset(start).limit(size).all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": start,
+                "size": size,
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get address transactions", address=address, error=str(e))
+            raise
+
+    def get_indexer_status(self) -> Dict:
+        try:
+            latest_block = self.db.query(ProcessedBlock).order_by(ProcessedBlock.height.desc()).first()
+            latest_brc20_op = self.db.query(BRC20Operation).order_by(BRC20Operation.block_height.desc()).first()
+
+            return {
+                "current_block_height_network": (latest_block.height if latest_block else 0),
+                "last_indexed_block_main_chain": (latest_block.height if latest_block else 0),
+                "last_indexed_brc20_op_block": (latest_brc20_op.block_height if latest_brc20_op else 0),
+            }
+        except Exception as e:
+            logger.error("Failed to get indexer status", error=str(e))
+            raise
+
+    def get_operations_by_height(self, height: int, skip: int = 0, limit: int = 100000) -> List[Dict]:
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    BRC20Operation.block_height == height,
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.tx_index.asc())
+            )
+
+            results = query.offset(skip).limit(limit).all()
+
+            result = []
+            for op, block_hash in results:
+                operation_data = self._map_operation_to_op_model(op, block_hash)
+                result.append(operation_data)
+
+            return result
+
+        except Exception as e:
+            logger.error("Failed to get operations by height", height=height, error=str(e))
+            raise
+
+    def get_transaction_operations(self, ticker: str, txid: str) -> List[Dict]:
+        try:
+            results = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    BRC20Operation.ticker == ticker.upper(),
+                    BRC20Operation.txid == txid,
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.tx_index.asc())
+                .all()
+            )
+
+            result = []
+            for op, block_hash in results:
+                operation_data = self._map_operation_to_op_model(op, block_hash)
+                result.append(operation_data)
+
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to get transaction operations",
+                ticker=ticker,
+                txid=txid,
+                error=str(e),
+            )
+            raise
+
+    def get_address_ticker_history(
+        self,
+        address: str,
+        ticker: str,
+        op_type: str = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get operations for specific address and ticker"""
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    or_(
+                        BRC20Operation.from_address == address,
+                        BRC20Operation.to_address == address,
+                    ),
+                    BRC20Operation.ticker == ticker.upper(),
+                    BRC20Operation.is_valid.is_(True),
+                )
+            )
+
+            if op_type:
+                query = query.filter(BRC20Operation.operation == op_type)
+
+            results = (
+                query.order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+
+            result = []
+            for op, block_hash in results:
+                result.append(
+                    {
+                        "id": op.id,
+                        "op": op.operation,
+                        "ticker": op.ticker,
+                        "amount": op.amount or "",
+                        "from_address": op.from_address or "",
+                        "to_address": op.to_address or "",
+                        "block_height": op.block_height,
+                        "block_hash": block_hash,
+                        "timestamp": (op.timestamp.isoformat() + "Z" if op.timestamp else ""),
+                        "valid": op.is_valid,
+                    }
+                )
+
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to get address ticker history",
+                address=address,
+                ticker=ticker,
+                error=str(e),
+            )
+            raise
+
+    def get_single_address_balance(self, address: str, ticker: str) -> Dict:
+        """Get balance for specific address and ticker"""
+        try:
+            balance = (
+                self.db.query(Balance).filter(Balance.address == address, Balance.ticker == ticker.upper()).first()
+            )
+
+            if not balance:
+                return {
+                    "pkscript": "",
+                    "ticker": ticker.upper(),
+                    "wallet": address,
+                    "overall_balance": "0",
+                    "available_balance": "0",
+                    "block_height": 0,
+                }
+
+            latest_transfer = (
+                self.db.query(BRC20Operation)
+                .filter(
+                    BRC20Operation.to_address == address,
+                    BRC20Operation.ticker == ticker.upper(),
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.block_height.desc())
+                .first()
+            )
+
+            return {
+                "pkscript": "",
+                "ticker": balance.ticker,
+                "wallet": balance.address,
+                "overall_balance": str(balance.balance),
+                "available_balance": str(balance.balance),
+                "block_height": latest_transfer.block_height if latest_transfer else 0,
+            }
+        except Exception as e:
+            logger.error(
+                "Failed to get single address balance",
+                address=address,
+                ticker=ticker,
+                error=str(e),
+            )
+            raise
+
+    def get_address_history_complete(
+        self,
+        address: str,
+        ticker: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Op]:
+        """Get complete address history with all Op model fields populated"""
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    or_(
+                        BRC20Operation.from_address == address,
+                        BRC20Operation.to_address == address,
+                    ),
+                    BRC20Operation.is_valid.is_(True),
+                )
+            )
+
+            if ticker:
+                query = query.filter(BRC20Operation.ticker == ticker.upper())
+
+            results = (
+                query.order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+
+            operations = []
+            for db_op, block_hash in results:
+                op_data = self._map_operation_to_op_model(db_op, block_hash)
+                operations.append(Op(**op_data))
+
+            return operations
+
+        except Exception as e:
+            logger.error(
+                "Failed to get complete address history",
+                address=address,
+                ticker=ticker,
+                error=str(e),
+            )
+            raise
+
+    def get_ticker_operations_complete(self, ticker: str, skip: int = 0, limit: int = 100) -> List[Op]:
+        """Get complete operations for a ticker with all Op model fields populated"""
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    BRC20Operation.ticker == ticker.upper(),
+                    BRC20Operation.is_valid.is_(True),
+                )
+            )
+
+            results = (
+                query.order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+
+            operations = []
+            for db_op, block_hash in results:
+                op_data = self._map_operation_to_op_model(db_op, block_hash)
+                operations.append(Op(**op_data))
+
+            return operations
+
+        except Exception as e:
+            logger.error("Failed to get complete ticker operations", ticker=ticker, error=str(e))
+            raise
+
+    def get_operation_by_id_complete(self, operation_id: int) -> Optional[Op]:
+        """Get a single operation by ID with all Op model fields populated"""
+        try:
+            result = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(BRC20Operation.id == operation_id)
+                .first()
+            )
+
+            if not result:
+                return None
+
+            db_op, block_hash = result
+            op_data = self._map_operation_to_op_model(db_op, block_hash)
+            return Op(**op_data)
+
+        except Exception as e:
+            logger.error("Failed to get operation by ID", operation_id=operation_id, error=str(e))
+            raise
+
+    def _map_operation_to_op_model(self, db_op: BRC20Operation, block_hash: str) -> Dict:
+        """Map database operation to Op model data with all required fields"""
+        return {
+            "id": db_op.id,
+            "tx_id": db_op.txid,
+            "txid": db_op.txid,
+            "op": db_op.operation,
+            "ticker": db_op.ticker,
+            "amount": db_op.amount if db_op.amount else None,
+            "block_height": db_op.block_height,
+            "block_hash": block_hash,
+            "tx_index": db_op.tx_index,
+            "timestamp": db_op.timestamp.isoformat() + "Z" if db_op.timestamp else "",
+            "from_address": db_op.from_address,
+            "to_address": db_op.to_address,
+            "valid": db_op.is_valid,
+            "is_marketplace": db_op.is_marketplace if hasattr(db_op, "is_marketplace") else False,
+        }
+
+    def get_history_by_height(self, height: int, start: int = 0, size: int = 100000) -> Dict:
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    BRC20Operation.block_height == height,
+                    BRC20Operation.is_valid.is_(True),
+                )
+                .order_by(BRC20Operation.tx_index.asc())
+            )
+
+            total = query.count()
+            results = query.offset(start).limit(size).all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": start,
+                "size": size,
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get history by height", height=height, error=str(e))
+            raise
+
+    def get_all_tickers_with_stats_unlimited(self, max_results: Optional[int] = None) -> Dict:
+        try:
+            query = self.db.query(Deploy).order_by(Deploy.deploy_height.desc())
+            total = query.count()
+
+            if max_results:
+                deploys = query.limit(max_results).all()
+            else:
+                deploys = query.all()
+
+            ticker_data = []
+            for deploy in deploys:
+                stats = self._calculate_ticker_stats(deploy)
+                if stats:
+                    ticker_data.append(stats)
+
+            return {
+                "total": total,
+                "start": 0,
+                "size": len(ticker_data),
+                "data": ticker_data,
+            }
+        except Exception as e:
+            logger.error("Failed to get all tickers", error=str(e))
+            raise
+
+    def get_all_ticker_holders_unlimited(self, ticker: str, max_results: Optional[int] = None) -> Dict:
+        try:
+            normalized_ticker = ticker.upper()
+
+            query = (
+                self.db.query(Balance)
+                .filter(Balance.ticker == normalized_ticker, Balance.balance != 0)
+                .order_by(Balance.balance.desc())
+            )
+
+            total = query.count()
+
+            if max_results:
+                holders = query.limit(max_results).all()
+            else:
+                holders = query.all()
+
+            holder_addresses = [h.address for h in holders]
+            latest_transfers = {}
+
+            if holder_addresses:
+                subquery = (
+                    self.db.query(
+                        BRC20Operation.to_address,
+                        func.max(BRC20Operation.block_height).label("max_height"),
+                    )
+                    .filter(
+                        BRC20Operation.ticker == normalized_ticker,
+                        BRC20Operation.to_address.in_(holder_addresses),
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .group_by(BRC20Operation.to_address)
+                    .subquery()
+                )
+
+                transfers = (
+                    self.db.query(BRC20Operation)
+                    .join(
+                        subquery,
+                        and_(
+                            BRC20Operation.to_address == subquery.c.to_address,
+                            BRC20Operation.block_height == subquery.c.max_height,
+                        ),
+                    )
+                    .filter(
+                        BRC20Operation.ticker == normalized_ticker,
+                        BRC20Operation.is_valid.is_(True),
+                    )
+                    .all()
+                )
+
+                latest_transfers = {t.to_address: t for t in transfers}
+
+            holder_data = []
+            virtual_data = []
+
+            for holder in holders:
+                transfer = latest_transfers.get(holder.address)
+                holder_data.append(
+                    {
+                        "address": holder.address,
+                        "balance": holder.balance,
+                        "transfer_txid": transfer.txid if transfer else "",
+                        "transfer_height": transfer.block_height if transfer else 0,
+                        "transfer_time": (int(transfer.timestamp.timestamp()) if transfer else 0),
+                    }
+                )
+
+                # Calculate virtual_accounting entry for POOL addresses if partial_amount > 0
+                if holder.address.startswith("POOL::") and not holder.address.startswith("POOL:PARTIAL::"):
+                    # Extract pool_id from address (POOL::LOL-WTF -> LOL-WTF)
+                    pool_id = holder.address.replace("POOL::", "")
+
+                    # Get total locked for this pool and ticker
+                    total_locked_result = (
+                        self.db.query(func.coalesce(func.sum(SwapPosition.amount_locked), 0))
+                        .filter(
+                            SwapPosition.pool_id == pool_id,
+                            SwapPosition.src_ticker == normalized_ticker,
+                            SwapPosition.status == SwapPositionStatus.active,
+                        )
+                        .scalar()
+                    )
+                    total_locked = (
+                        Decimal(str(total_locked_result)) if total_locked_result is not None else Decimal("0")
+                    )
+
+                    # Calculate partial amount
+                    real_balance = Decimal(str(holder.balance))
+                    partial_amount = total_locked - real_balance
+                    if partial_amount > 0:
+                        # Add virtual_accounting entry to separate list
+                        virtual_address = f"POOL:PARTIAL::{pool_id}"
+                        virtual_data.append(
+                            {
+                                "address": virtual_address,
+                                "balance": str(partial_amount),
+                                "transfer_txid": "",
+                                "transfer_height": 0,
+                                "transfer_time": 0,
+                            }
+                        )
+
+            return {
+                "total": total,
+                "start": 0,
+                "size": len(holder_data),
+                "data": holder_data,
+                "virtual_accounting": virtual_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get all ticker holders", ticker=ticker, error=str(e))
+            raise
+
+    def get_all_ticker_transactions_unlimited(
+        self,
+        ticker: str,
+        max_results: Optional[int] = None,
+        include_invalid: bool = False,
+    ) -> Dict:
+        try:
+            normalized_ticker = ticker.upper()
+
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(BRC20Operation.ticker == normalized_ticker)
+            )
+
+            if not include_invalid:
+                query = query.filter(BRC20Operation.is_valid.is_(True))
+
+            query = query.order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+
+            total = query.count()
+
+            if max_results:
+                results = query.limit(max_results).all()
+            else:
+                results = query.all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": 0,
+                "size": len(transaction_data),
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get all ticker transactions", ticker=ticker, error=str(e))
+            raise
+
+    def get_all_address_transactions_unlimited(
+        self,
+        address: str,
+        max_results: Optional[int] = None,
+        include_invalid: bool = False,
+    ) -> Dict:
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(
+                    or_(
+                        BRC20Operation.from_address == address,
+                        BRC20Operation.to_address == address,
+                    )
+                )
+            )
+
+            if not include_invalid:
+                query = query.filter(BRC20Operation.is_valid.is_(True))
+
+            query = query.order_by(BRC20Operation.block_height.desc(), BRC20Operation.tx_index.desc())
+
+            total = query.count()
+
+            if max_results:
+                results = query.limit(max_results).all()
+            else:
+                results = query.all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": 0,
+                "size": len(transaction_data),
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get all address transactions", address=address, error=str(e))
+            raise
+
+    def get_all_history_by_height_unlimited(
+        self,
+        height: int,
+        max_results: Optional[int] = None,
+        include_invalid: bool = False,
+    ) -> Dict:
+        try:
+            query = (
+                self.db.query(BRC20Operation, ProcessedBlock.block_hash)
+                .join(ProcessedBlock, BRC20Operation.block_height == ProcessedBlock.height)
+                .filter(BRC20Operation.block_height == height)
+            )
+
+            if not include_invalid:
+                query = query.filter(BRC20Operation.is_valid.is_(True))
+
+            query = query.order_by(BRC20Operation.tx_index.asc())
+
+            total = query.count()
+
+            if max_results:
+                results = query.limit(max_results).all()
+            else:
+                results = query.all()
+
+            transaction_data = []
+            for tx, block_hash in results:
+                operation_data = self._map_operation_to_op_model(tx, block_hash)
+                transaction_data.append(operation_data)
+
+            return {
+                "total": total,
+                "start": 0,
+                "size": len(transaction_data),
+                "data": transaction_data,
+            }
+
+        except Exception as e:
+            logger.error("Failed to get all history by height", height=height, error=str(e))
+            raise

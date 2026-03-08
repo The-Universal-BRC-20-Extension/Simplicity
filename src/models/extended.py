@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import Session
+from decimal import Decimal
 from datetime import datetime
-from typing import cast
 from .base import Base
 
 
@@ -28,66 +28,83 @@ class Extended(Base):
 
     __tablename__ = "extended_contracts"
 
+    # Primary key
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    script_address = Column(String, unique=True, nullable=False, index=True)
+    # Contract identification
+    script_address = Column(
+        String, nullable=False, index=True
+    )  # Removed unique=True to allow multiple mints to same contract
     initiator_address = Column(String, nullable=False, index=True)
 
+    # Contract state
     status = Column(String, nullable=False, default="active")  # 'active', 'closed', 'expired'
 
+    # Timelock details
     timelock_delay = Column(Integer, nullable=False, comment="Timelock delay in blocks")
 
+    # Amount (for wrap contracts)
     initial_amount = Column(Numeric(precision=38, scale=8), nullable=True, comment="Amount of tokens initially wrapped")
 
+    # Creation metadata
     creation_txid = Column(String, nullable=False, index=True)
     creation_timestamp = Column(DateTime, nullable=False)
     creation_height = Column(Integer, nullable=False, index=True)
 
+    # Taproot-specific data
     internal_pubkey = Column(String, nullable=True)  # Hex representation
     tapscript_hex = Column(Text, nullable=True)  # Hex representation of the validated tapscript
     merkle_root = Column(String, nullable=True)  # Hex representation of the Merkle root
 
+    # Closure details
     closure_txid = Column(String, nullable=True, comment="Transaction ID that closed the contract")
     closure_timestamp = Column(DateTime, nullable=True, comment="Block timestamp when contract was closed")
     closure_height = Column(Integer, nullable=True, comment="Block height when contract was closed")
 
+    # Extension-specific data (JSON for flexibility)
     extension_data = Column(Text, nullable=True)  # JSON string for extension-specific data
 
+    # Timestamps
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
     def is_active(self) -> bool:
         """Check if the contract is active"""
-        return cast(bool, self.status == "active")
+        return self.status == "active"
 
     def is_closed(self) -> bool:
         """Check if the contract is closed"""
-        return cast(bool, self.status == "closed")
+        return self.status == "closed"
 
     def is_expired(self) -> bool:
         """Check if the contract is expired"""
-        return cast(bool, self.status == "expired")
+        return self.status == "expired"
 
     def close_contract(
         self, closure_txid: str = None, closure_timestamp: datetime = None, closure_height: int = None
     ) -> None:
         """Mark the contract as closed"""
-        self.status = "closed"  # type: ignore[assignment]
+        self.status = "closed"
         if closure_txid:
-            self.closure_txid = closure_txid  # type: ignore[assignment]
+            self.closure_txid = closure_txid
         if closure_timestamp:
-            self.closure_timestamp = closure_timestamp  # type: ignore[assignment]
+            self.closure_timestamp = closure_timestamp
         if closure_height:
-            self.closure_height = closure_height  # type: ignore[assignment]
+            self.closure_height = closure_height
 
     def expire_contract(self) -> None:
         """Mark the contract as expired"""
-        self.status = "expired"  # type: ignore[assignment]
+        self.status = "expired"
 
     @classmethod
     def get_by_script_address(cls, session: Session, script_address: str):
-        """Get contract by script address"""
+        """Get contract by script address (returns first match, as multiple contracts can share the same address)"""
         return session.query(cls).filter_by(script_address=script_address).first()
+
+    @classmethod
+    def get_all_by_script_address(cls, session: Session, script_address: str):
+        """Get all contracts by script address (allows multiple mints to same contract)"""
+        return session.query(cls).filter_by(script_address=script_address).all()
 
     @classmethod
     def get_by_initiator(cls, session: Session, initiator_address: str):

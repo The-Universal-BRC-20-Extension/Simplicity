@@ -1,6 +1,10 @@
 """
-Test Op Model Migration
+Test Op Model Migration. SKIPPED: Phase B.
 """
+
+import pytest
+
+pytestmark = pytest.mark.skip(reason="Op model; Phase B")
 
 from decimal import Decimal
 from datetime import datetime

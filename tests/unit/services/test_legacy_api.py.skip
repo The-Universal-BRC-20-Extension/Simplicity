@@ -1,0 +1,128 @@
+"""
+Tests for Legacy API service
+"""
+
+from unittest.mock import Mock, patch
+from src.services.legacy_api import LegacyAPIService
+
+
+class TestLegacyAPIService:
+    """Test cases for LegacyAPIService"""
+
+    def test_init_with_api_key(self):
+        """Test initialization with API key"""
+        service = LegacyAPIService(api_key="test_key")
+        assert service.api_key == "test_key"
+        assert service.is_enabled() is True
+
+    def test_init_without_api_key(self):
+        """Test initialization without API key"""
+        with patch("src.services.legacy_api.settings") as mock_settings:
+            mock_settings.MAESTRO_API_KEY = None
+            service = LegacyAPIService()
+            assert service.api_key is None
+            assert service.is_enabled() is False
+
+    def test_check_ticker_exists_not_4_chars(self):
+        """Test that non-4-character tickers are skipped"""
+        service = LegacyAPIService(api_key="test_key")
+        result = service.check_ticker_exists("ABC", 1000)
+        assert result is False
+
+    def test_check_ticker_exists_no_api_key(self):
+        """Test that check is skipped when no API key"""
+        with patch("src.services.legacy_api.settings") as mock_settings:
+            mock_settings.MAESTRO_API_KEY = None
+            service = LegacyAPIService()
+            result = service.check_ticker_exists("ABCD", 1000)
+            assert result is False
+
+    @patch("requests.get")
+    def test_check_ticker_exists_legacy_before_current(self, mock_get):
+        """Test when Legacy BRC-20 was deployed before current block"""
+        # Mock response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = '{"data":{"deploy_inscription":"test_inscription_i0"}}'
+        mock_response.json.return_value = {"data": {"deploy_inscription": "test_inscription_i0"}}
+        mock_get.return_value = mock_response
+
+        # Mock inscription block height check - Legacy deployed before current
+        with patch.object(LegacyAPIService, "_get_inscription_block_height", return_value=500):
+            service = LegacyAPIService(api_key="test_key")
+            result = service.check_ticker_exists("ABCD", 1000)
+            assert result is True  # Legacy deployed before current, reject Universal
+
+    @patch("requests.get")
+    def test_check_ticker_exists_legacy_after_current(self, mock_get):
+        """Test when Legacy BRC-20 was deployed after current block"""
+        # Mock response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = '{"data":{"deploy_inscription":"test_inscription_i0"}}'
+        mock_response.json.return_value = {"data": {"deploy_inscription": "test_inscription_i0"}}
+        mock_get.return_value = mock_response
+
+        # Mock inscription block height check - Legacy deployed after current
+        with patch.object(LegacyAPIService, "_get_inscription_block_height", return_value=1500):
+            service = LegacyAPIService(api_key="test_key")
+            result = service.check_ticker_exists("ABCD", 1000)
+            assert result is False  # Legacy deployed after current, allow Universal
+
+    @patch("requests.get")
+    def test_check_ticker_not_exists(self, mock_get):
+        """Test when ticker doesn't exist on Legacy BRC-20"""
+        # Mock response - ticker not found
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "Unable to find requested data on-chain"
+        mock_get.return_value = mock_response
+
+        service = LegacyAPIService(api_key="test_key")
+        result = service.check_ticker_exists("ABCD", 1000)
+        assert result is False
+
+    @patch("requests.get")
+    def test_check_ticker_api_timeout(self, mock_get):
+        """Test API timeout handling"""
+        import requests
+
+        mock_get.side_effect = requests.exceptions.Timeout()
+
+        service = LegacyAPIService(api_key="test_key")
+        result = service.check_ticker_exists("ABCD", 1000)
+        assert result is False
+
+    @patch("requests.get")
+    def test_check_ticker_api_error(self, mock_get):
+        """Test API error handling"""
+        import requests
+
+        mock_get.side_effect = requests.exceptions.RequestException("API Error")
+
+        service = LegacyAPIService(api_key="test_key")
+        result = service.check_ticker_exists("ABCD", 1000)
+        assert result is False
+
+    @patch("requests.get")
+    def test_get_inscription_block_height_success(self, mock_get):
+        """Test successful inscription block height retrieval"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": {"height": 500}}
+        mock_get.return_value = mock_response
+
+        service = LegacyAPIService(api_key="test_key")
+        result = service._get_inscription_block_height("test_inscription_i0")
+        assert result == 500
+
+    @patch("requests.get")
+    def test_get_inscription_block_height_failure(self, mock_get):
+        """Test inscription block height retrieval failure"""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        service = LegacyAPIService(api_key="test_key")
+        result = service._get_inscription_block_height("test_inscription_i0")
+        assert result is None

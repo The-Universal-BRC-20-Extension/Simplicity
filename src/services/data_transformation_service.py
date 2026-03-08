@@ -12,94 +12,147 @@ class DataTransformationService:
     """
 
     @staticmethod
-    def transform_ticker_info(backend_data: Dict) -> Dict:
+    def transform_ticker_info(db_data: Dict) -> Dict:
+        max_supply = db_data.get("max_supply") or db_data.get("max")
+        remaining_supply = db_data.get("remaining_supply")
+        ticker = db_data.get("tick")
+        limit_per_op = db_data.get("limit")
+        minted = db_data.get("minted")
+
+        logger.debug(
+            "transform_ticker_info",
+            ticker=ticker,
+            remaining_supply_raw=remaining_supply,
+            remaining_supply_type=type(remaining_supply).__name__ if remaining_supply is not None else None,
+            max_supply=max_supply,
+        )
+
+        # Determine if this is a special token (STONES or Wrap)
+        # STONES: max_supply == 0 AND limit_per_op == 1
+        # Wrap: max_supply == 0 AND limit_per_op == 0
+        is_special_token = (
+            max_supply == "0"
+            or max_supply == 0
+            or (isinstance(max_supply, str) and max_supply == "0.00000000")
+            or ticker == "STONES"
+        )
+
+        if is_special_token:
+            # For STONES and Wrap tokens, use remaining_supply from DB (max_supply + total_locked)
+            if remaining_supply is None:
+                logger.warning("remaining_supply is None for special token, using 0", ticker=ticker)
+                remaining_supply = "0"
+            else:
+                remaining_supply = str(remaining_supply)
+        else:
+            # For normal BRC-20 tokens, calculate remaining_supply = max_supply - total_minted
+            if minted is not None:
+                remaining_supply = DataTransformationService._calculate_remaining_supply(max_supply, minted)
+                logger.debug(
+                    "Calculated remaining_supply for normal token",
+                    ticker=ticker,
+                    max_supply=max_supply,
+                    minted=minted,
+                    remaining_supply=remaining_supply,
+                )
+            elif remaining_supply is None:
+                logger.warning("remaining_supply is None and minted is None, using 0", ticker=ticker)
+                remaining_supply = "0"
+            else:
+                # Fallback: use DB value if minted is not available
+                remaining_supply = str(remaining_supply)
+
         return {
-            "ticker": backend_data.get("tick"),
-            "decimals": backend_data.get("decimals"),
-            "max_supply": backend_data.get("max_supply"),
-            "limit_per_mint": backend_data.get("limit"),
-            "deploy_tx_id": backend_data.get("deploy_txid"),
-            "actual_deploy_txid_for_api": backend_data.get("deploy_txid"),
-            "deploy_block_height": backend_data.get("deploy_height"),
-            "deploy_timestamp": DataTransformationService._format_timestamp(backend_data.get("deploy_time")),
-            "creator_address": backend_data.get("deployer"),
-            "remaining_supply": DataTransformationService._calculate_remaining_supply(
-                backend_data.get("max_supply"), backend_data.get("minted")
-            ),
-            "current_supply": backend_data.get("minted"),
-            "holders": backend_data.get("holders"),
+            "ticker": ticker,
+            "decimals": db_data.get("decimals"),
+            "max_supply": max_supply,
+            "limit_per_mint": limit_per_op,
+            "deploy_tx_id": db_data.get("deploy_txid"),
+            "actual_deploy_txid_for_api": db_data.get("deploy_txid"),
+            "deploy_block_height": db_data.get("deploy_height"),
+            "deploy_timestamp": DataTransformationService._format_timestamp(db_data.get("deploy_time")),
+            "creator_address": db_data.get("deployer"),
+            "remaining_supply": remaining_supply,
+            "minted": minted if minted is not None else "0",  # Total minted (sum of valid mint operations)
+            "current_supply": db_data.get("current_supply")
+            or (minted if minted is not None else None),  # Sum of balances or minted fallback
+            "circulating_supply": db_data.get("circulating_supply"),  # Tokens available on market (not locked)
+            "total_locked": db_data.get("total_locked"),  # Total locked in active swap positions
+            "holders": db_data.get("holders"),
+            "is_curve": db_data.get("is_curve", False),  # OPI-2 Curve Extension
         }
 
     @staticmethod
-    def transform_operation(backend_data: Dict) -> Dict:
+    def transform_operation(db_data: Dict) -> Dict:
         return {
-            "id": backend_data.get("id"),
-            "tx_id": backend_data.get("txid"),
+            "id": db_data.get("id"),
+            "tx_id": db_data.get("txid"),
             "inscription_id": None,
-            "op": backend_data.get("operation"),
-            "tick": backend_data.get("tick"),
-            "max_supply_str": backend_data.get("max_supply_str"),
-            "limit_per_mint_str": backend_data.get("limit_per_mint_str"),
-            "amount": backend_data.get("amount"),
-            "decimals_str": backend_data.get("decimals_str"),
-            "block_height": backend_data.get("height"),
-            "block_hash": backend_data.get("block_hash", ""),
-            "tx_index": backend_data.get("tx_index"),
-            "timestamp": DataTransformationService._format_timestamp(backend_data.get("time")),
-            "address": backend_data.get("from_address"),
-            "processed": backend_data.get("is_valid"),
-            "valid": backend_data.get("is_valid"),
-            "error": backend_data.get("error_message"),
+            "op": db_data.get("operation"),
+            "tick": db_data.get("tick"),
+            "max_supply_str": db_data.get("max_supply_str"),
+            "limit_per_mint_str": db_data.get("limit_per_mint_str"),
+            "amount": db_data.get("amount"),
+            "decimals_str": db_data.get("decimals_str"),
+            "block_height": db_data.get("height"),
+            "block_hash": db_data.get("block_hash", ""),
+            "tx_index": db_data.get("tx_index"),
+            "timestamp": DataTransformationService._format_timestamp(db_data.get("time")),
+            "address": db_data.get("from_address"),
+            "processed": db_data.get("is_valid"),
+            "valid": db_data.get("is_valid"),
+            "error": db_data.get("error_message"),
         }
 
     @staticmethod
-    def transform_address_balance(backend_data: Dict) -> Dict:
-        available_bal = backend_data.get("balance", "0")
+    def transform_address_balance(db_data: Dict) -> Dict:
+        available_bal = db_data.get("balance", "0")
         return {
             "pkscript": "",
-            "ticker": backend_data.get("ticker"),
-            "wallet": backend_data.get("address"),
+            "ticker": db_data.get("ticker"),
+            "wallet": db_data.get("address"),
             "overall_balance": available_bal,
             "available_balance": available_bal,
-            "block_height": backend_data.get("transfer_height", 0),
+            "block_height": db_data.get("transfer_height", 0),
         }
 
     @staticmethod
-    def transform_holder_info(backend_data: Dict) -> Dict:
-        available_bal = backend_data.get("balance", "0")
+    def transform_holder_info(db_data: Dict) -> Dict:
+        available_bal = db_data.get("balance", "0")
         return {
             "pkscript": "",
-            "ticker": backend_data.get("ticker"),
-            "wallet": backend_data.get("address"),
+            "ticker": db_data.get("ticker"),
+            "wallet": db_data.get("address"),
             "overall_balance": available_bal,
             "available_balance": available_bal,
-            "block_height": backend_data.get("transfer_height", 0),
+            "block_height": db_data.get("transfer_height", 0),
         }
 
     @staticmethod
-    def transform_transaction_operation(backend_data: Dict) -> Dict:
+    def transform_transaction_operation(db_data: Dict) -> Dict:
         return {
-            "id": backend_data.get("id"),
-            "tx_id": backend_data.get("tx_id"),
-            "txid": backend_data.get("txid"),
-            "op": backend_data.get("op"),
-            "ticker": backend_data.get("ticker"),
-            "amount": backend_data.get("amount"),
-            "from_address": backend_data.get("from_address"),
-            "to_address": backend_data.get("to_address"),
-            "block_height": backend_data.get("block_height"),
-            "block_hash": backend_data.get("block_hash", ""),
-            "tx_index": backend_data.get("tx_index"),
-            "timestamp": backend_data.get("timestamp"),
-            "valid": backend_data.get("valid"),
+            "id": db_data.get("id"),
+            "tx_id": db_data.get("tx_id"),
+            "txid": db_data.get("txid"),
+            "op": db_data.get("op"),
+            "ticker": db_data.get("ticker"),
+            "amount": db_data.get("amount"),
+            "from_address": db_data.get("from_address"),
+            "to_address": db_data.get("to_address"),
+            "block_height": db_data.get("block_height"),
+            "block_hash": db_data.get("block_hash", ""),
+            "tx_index": db_data.get("tx_index"),
+            "timestamp": db_data.get("timestamp"),
+            "valid": db_data.get("valid"),
+            "is_marketplace": db_data.get("is_marketplace", False),
         }
 
     @staticmethod
-    def transform_indexer_status(backend_data: Dict) -> Dict:
+    def transform_indexer_status(db_data: Dict) -> Dict:
         return {
-            "current_block_height_network": backend_data.get("network_height"),
-            "last_indexed_block_main_chain": backend_data.get("indexed_height"),
-            "last_indexed_brc20_op_block": backend_data.get("brc20_height"),
+            "current_block_height_network": db_data.get("network_height"),
+            "last_indexed_block_main_chain": db_data.get("indexed_height"),
+            "last_indexed_brc20_op_block": db_data.get("brc20_height"),
         }
 
     @staticmethod
